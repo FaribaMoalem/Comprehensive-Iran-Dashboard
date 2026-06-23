@@ -422,11 +422,14 @@ function filtersToParams() {
   return p;
 }
 
+let _filterTimer = null;
 async function onFilterChange() {
   updateFilterBadge();
-  // reload cascaded options first, then reload map data
-  await loadFilterOptions();
-  loadData();
+  clearTimeout(_filterTimer);
+  _filterTimer = setTimeout(async () => {
+    await loadFilterOptions();
+    loadData();
+  }, 350);
 }
 
 function resetFilters() {

@@ -6,6 +6,7 @@ Iran Province Service Level Dashboard — Backend API
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from contextlib import asynccontextmanager
 from typing import Optional
 import pyodbc
 import logging
@@ -14,7 +15,23 @@ import time
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Iran SL Dashboard API")
+
+# ─── Startup: pre-warm caches ──────────────────────────────────────────────────
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    logger.info("pre-warming caches...")
+    try:
+        _refresh_loc_combos()
+        _refresh_item_combos()
+        # warm province SL (most-used, slowest)
+        service_level()
+        logger.info("cache warm-up done")
+    except Exception as e:
+        logger.warning(f"warm-up failed (non-fatal): {e}")
+    yield
+
+
+app = FastAPI(title="Iran SL Dashboard API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -35,19 +52,15 @@ CONN_STR = (
 _cache: dict = {}
 CACHE_TTL_PROVINCE = 15 * 60
 CACHE_TTL_DETAIL   =  5 * 60
-CACHE_TTL_FILTERS  = 30 * 60   # filter options rarely change
+CACHE_TTL_COMBOS   = 30 * 60   # combo tables rarely change
 
-
-def cached_query(key: str, sql: str, params: tuple = (), ttl: int = CACHE_TTL_PROVINCE):
-    now = time.monotonic()
-    if key in _cache:
-        result, ts = _cache[key]
-        if now - ts < ttl:
-            logger.info(f"cache hit: {key}")
-            return result
-    result = run_query(sql, params)
-    _cache[key] = (result, now)
-    return result
+# In-memory combo tables (loaded once, refreshed every 30 min)
+# loc: [(province, city, district), ...]
+# itm: [(l1, l2, l3, l4, l5, cd), ...]
+_loc_combos: list = []
+_loc_combos_ts: float = 0.0
+_itm_combos: list = []
+_itm_combos_ts: float = 0.0
 
 
 def get_connection():
@@ -67,7 +80,6 @@ def run_query(sql: str, params: tuple = ()):
         data = []
         for row in cursor.fetchall():
             r = dict(zip(columns, row))
-            # Numeric coercions for SL fields
             if "sl_percent" in r:
                 r["sl_percent"]     = float(r.get("sl_percent") or 0)
                 r["target_percent"] = float(r.get("target_percent") or 80)
@@ -84,26 +96,37 @@ def run_query(sql: str, params: tuple = ()):
         conn.close()
 
 
-def run_distinct(sql: str, params: tuple = ()) -> list:
-    """Return a flat list of distinct string values; silently returns [] on error."""
+def run_rows(sql: str, params: tuple = ()) -> list:
+    """Return raw list of tuples; returns [] on error."""
+    conn = get_connection()
     try:
-        conn = get_connection()
         cursor = conn.cursor()
         cursor.execute(sql, params)
-        return [str(row[0]) for row in cursor.fetchall() if row[0] is not None and str(row[0]).strip()]
+        return [tuple(row) for row in cursor.fetchall()]
     except Exception as e:
-        logger.warning(f"filter-options query failed: {e}")
+        logger.warning(f"run_rows error: {e}")
         return []
     finally:
-        try: conn.close()
-        except: pass
+        conn.close()
 
 
-# ─── Shared aggregation fragment ───────────────────────────────────────────────
+def cached_query(key: str, sql: str, params: tuple = (), ttl: int = CACHE_TTL_PROVINCE):
+    now = time.monotonic()
+    if key in _cache:
+        result, ts = _cache[key]
+        if now - ts < ttl:
+            logger.info(f"cache hit: {key}")
+            return result
+    result = run_query(sql, params)
+    _cache[key] = (result, now)
+    return result
+
+
+# ─── Shared aggregation fragment (TRY_CAST avoids crash on 'Cancelled' rows) ───
 _AGG = """
     ROUND(
-        100.0 * SUM(CAST(f.IsOnTimeDeliverity AS INT))
-        / NULLIF(COUNT(f.ID), 0)
+        100.0 * SUM(TRY_CAST(f.IsOnTimeDeliverity AS INT))
+        / NULLIF(SUM(CASE WHEN TRY_CAST(f.IsOnTimeDeliverity AS INT) IS NOT NULL THEN 1 ELSE 0 END), 0)
     , 1)                                            AS sl_percent,
     80.0                                            AS target_percent,
     COUNT(DISTINCT f.COM_DIM_VendorRef)             AS vendor_count,
@@ -116,42 +139,23 @@ def build_filters(
     ig1=None, ig2=None, ig3=None, ig4=None, ig5=None,
     commerce_dept=None,
 ):
-    """
-    Returns (extra_joins: str, extra_where: str, params: tuple).
-    Column names that may need adjustment:
-      DIM_Item  : ItemGroupLevel1 … ItemGroupLevel5
-      DIM_Vendor: CommerceDepartment
-      Fact ref  : COM_DIM_ItemRef
-    """
     conditions: list[str] = []
     params:     list      = []
-
-    # Join DIM_Item when any item-level filter is active
     need_item = any([ig1, ig2, ig3, ig4, ig5, commerce_dept])
 
-    # Location
-    if province:
-        conditions.append("loc.StateChart = ?"); params.append(province)
-    if city:
-        conditions.append("loc.CityChart = ?");  params.append(city)
-    if district:
-        conditions.append("ISNULL(NULLIF(loc.District, ''), N'نامشخص') = ?"); params.append(district)
-    if store_id:
-        conditions.append("loc.BKInventLocationId = ?"); params.append(store_id)
+    if province: conditions.append("loc.StateChart = ?");                                  params.append(province)
+    if city:     conditions.append("loc.CityChart = ?");                                   params.append(city)
+    if district: conditions.append("ISNULL(NULLIF(loc.District, ''), N'نامشخص') = ?");    params.append(district)
+    if store_id: conditions.append("loc.BKInventLocationId = ?");                          params.append(store_id)
 
-    # Item group levels — columns: Level1…Level5 in COM.DIM_Item
     for col, val in [("Level1",ig1),("Level2",ig2),("Level3",ig3),("Level4",ig4),("Level5",ig5)]:
-        if val:
-            conditions.append(f"itm.{col} = ?"); params.append(val)
-
-    # CommerceDepartment is in COM.DIM_Item
+        if val: conditions.append(f"itm.{col} = ?"); params.append(val)
     if commerce_dept:
         conditions.append("itm.CommerceDepartment = ?"); params.append(commerce_dept)
 
-    # Extra JOIN only when needed
     extra_joins = ""
     if need_item:
-        extra_joins = "\nLEFT JOIN [COM].[DIM_Item] AS itm ON itm.ID = f.COM_DIM_ItemRef"
+        extra_joins = "\nLEFT JOIN [COM].[DIM_Item] AS itm WITH (NOLOCK) ON itm.ID = f.COM_DIM_ItemRef"
 
     extra_where = ("AND " + " AND ".join(conditions)) if conditions else ""
     return extra_joins, extra_where, tuple(params)
@@ -163,7 +167,57 @@ def filter_key(base: str, kw: dict) -> str:
     return f"{base}:{suffix}" if suffix else base
 
 
-# ─── Filter options (cascaded) ────────────────────────────────────────────────
+# ─── Combo-table cache (load once, Python-side cascade) ───────────────────────
+
+def _refresh_loc_combos():
+    """One DB query → all (province, city, district) combos. Cached 30 min."""
+    global _loc_combos, _loc_combos_ts
+    sql = """
+SELECT DISTINCT
+    loc.StateChart,
+    loc.CityChart,
+    ISNULL(NULLIF(loc.District, ''), N'نامشخص') AS dist
+FROM [SCM].[Fact_VendorServiceLevel] AS f WITH (NOLOCK)
+JOIN [COM].[DIM_InventLocation]      AS loc WITH (NOLOCK)
+  ON loc.ID = f.COM_DIM_InventLocationRef
+WHERE loc.StateChart IS NOT NULL AND loc.StateChart <> ''
+  AND loc.CityChart  IS NOT NULL AND loc.CityChart  <> ''"""
+    rows = run_rows(sql)
+    if rows:
+        _loc_combos    = [(str(r[0]), str(r[1]), str(r[2])) for r in rows]
+        _loc_combos_ts = time.monotonic()
+        logger.info(f"loc_combos loaded: {len(_loc_combos)} rows")
+
+
+def _refresh_item_combos():
+    """One DB query → all (Level1…5, CommerceDepartment) combos. Cached 30 min."""
+    global _itm_combos, _itm_combos_ts
+    sql = """
+SELECT DISTINCT
+    ISNULL(Level1, ''),  ISNULL(Level2, ''),  ISNULL(Level3, ''),
+    ISNULL(Level4, ''),  ISNULL(Level5, ''),  ISNULL(CommerceDepartment, '')
+FROM [COM].[DIM_Item] WITH (NOLOCK)
+WHERE Level1 IS NOT NULL AND Level1 <> ''"""
+    rows = run_rows(sql)
+    if rows:
+        _itm_combos    = [tuple(str(c) for c in r) for r in rows]
+        _itm_combos_ts = time.monotonic()
+        logger.info(f"itm_combos loaded: {len(_itm_combos)} rows")
+
+
+def _get_loc_combos() -> list:
+    if time.monotonic() - _loc_combos_ts > CACHE_TTL_COMBOS:
+        _refresh_loc_combos()
+    return _loc_combos
+
+
+def _get_itm_combos() -> list:
+    if time.monotonic() - _itm_combos_ts > CACHE_TTL_COMBOS:
+        _refresh_item_combos()
+    return _itm_combos
+
+
+# ─── Filter options — Python-side cascade (no extra DB queries) ────────────────
 @app.get("/api/filter-options")
 def filter_options(
     province:      Optional[str] = None,
@@ -176,64 +230,44 @@ def filter_options(
     ig5:           Optional[str] = None,
     commerce_dept: Optional[str] = None,
 ):
-    """
-    Location options cascade through Fact+DIM_InventLocation.
-    Item options cascade within DIM_Item directly (no Fact join needed).
-    """
+    locs = _get_loc_combos()   # (province, city, district)
+    itms = _get_itm_combos()   # (l1, l2, l3, l4, l5, cd)
 
-    # ── Location cascade (through Fact table) ──────────────────────────────
-    _LOC_BASE = (
-        "FROM [SCM].[Fact_VendorServiceLevel] f "
-        "JOIN [COM].[DIM_InventLocation] loc ON loc.ID = f.COM_DIM_InventLocationRef "
-    )
-    LOC_FILTERS = {
-        "province": ("loc.StateChart = ?",                             province),
-        "city":     ("loc.CityChart = ?",                             city),
-        "district": ("ISNULL(NULLIF(loc.District,''),N'نامشخص') = ?", district),
-    }
+    # ── Location cascade (each level filtered by parent selections only) ──
+    def _lf(idx, filters: dict) -> list:
+        rows = locs
+        for pidx, pval in filters.items():
+            if pval: rows = [r for r in rows if r[pidx] == pval]
+        return sorted({r[idx] for r in rows if r[idx]})
 
-    def loc_opts(col_expr: str, null_guard: str, exclude_key: str) -> list:
-        conds, params = [null_guard], []
-        for key, (cond, val) in LOC_FILTERS.items():
-            if key != exclude_key and val:
-                conds.append(cond); params.append(val)
-        sql = f"SELECT DISTINCT {col_expr} AS v {_LOC_BASE} WHERE {' AND '.join(conds)} ORDER BY v"
-        return run_distinct(sql, tuple(params))
+    provinces = _lf(0, {})
+    cities    = _lf(1, {0: province})
+    districts = _lf(2, {0: province, 1: city})
 
-    # ── Item cascade (directly from DIM_Item — no Fact join) ───────────────
-    ITEM_COL = {
-        "ig1":"Level1","ig2":"Level2","ig3":"Level3",
-        "ig4":"Level4","ig5":"Level5","cd":"CommerceDepartment",
-    }
-    ITEM_VAL = {
-        "ig1":ig1,"ig2":ig2,"ig3":ig3,"ig4":ig4,"ig5":ig5,"cd":commerce_dept,
-    }
+    # ── Item cascade (each level filtered by parent selections only) ──────
+    def _if(idx, filters: dict) -> list:
+        rows = itms
+        for pidx, pval in filters.items():
+            if pval: rows = [r for r in rows if r[pidx] == pval]
+        return sorted({r[idx] for r in rows if r[idx]})
 
-    def item_opts(col: str, exclude_key: str) -> list:
-        conds  = [f"{col} IS NOT NULL", f"{col} <> ''"]
-        params = []
-        for key, val in ITEM_VAL.items():
-            if key != exclude_key and val:
-                conds.append(f"{ITEM_COL[key]} = ?"); params.append(val)
-        sql = f"SELECT DISTINCT {col} AS v FROM [COM].[DIM_Item] WHERE {' AND '.join(conds)} ORDER BY v"
-        return run_distinct(sql, tuple(params))
+    ig1_opts = _if(0, {})
+    ig2_opts = _if(1, {0: ig1})
+    ig3_opts = _if(2, {0: ig1, 1: ig2})
+    ig4_opts = _if(3, {0: ig1, 1: ig2, 2: ig3})
+    ig5_opts = _if(4, {0: ig1, 1: ig2, 2: ig3, 3: ig4})
+    cd_opts  = _if(5, {0: ig1, 1: ig2, 2: ig3, 3: ig4, 4: ig5})
 
     return {
-        "provinces":      loc_opts("loc.StateChart",
-                                   "loc.StateChart IS NOT NULL AND loc.StateChart <> ''",
-                                   "province"),
-        "cities":         loc_opts("loc.CityChart",
-                                   "loc.CityChart IS NOT NULL AND loc.CityChart <> ''",
-                                   "city"),
-        "districts":      loc_opts("ISNULL(NULLIF(loc.District,''),N'نامشخص')",
-                                   "loc.StateChart IS NOT NULL",
-                                   "district"),
-        "ig1":            item_opts("Level1",            "ig1"),
-        "ig2":            item_opts("Level2",            "ig2"),
-        "ig3":            item_opts("Level3",            "ig3"),
-        "ig4":            item_opts("Level4",            "ig4"),
-        "ig5":            item_opts("Level5",            "ig5"),
-        "commerce_depts": item_opts("CommerceDepartment","cd"),
+        "provinces":      provinces,
+        "cities":         cities,
+        "districts":      districts,
+        "ig1":            ig1_opts,
+        "ig2":            ig2_opts,
+        "ig3":            ig3_opts,
+        "ig4":            ig4_opts,
+        "ig5":            ig5_opts,
+        "commerce_depts": cd_opts,
     }
 
 
@@ -257,15 +291,15 @@ SELECT
     loc.StateChart                                  AS name_fa,{_AGG},
     AVG(TRY_CAST(loc.Latitude  AS FLOAT))           AS lat,
     AVG(TRY_CAST(loc.Longitude AS FLOAT))           AS lng
-FROM [SCM].[Fact_VendorServiceLevel]    AS f
-JOIN [COM].[DIM_InventLocation]         AS loc ON loc.ID = f.COM_DIM_InventLocationRef
+FROM [SCM].[Fact_VendorServiceLevel] AS f   WITH (NOLOCK)
+JOIN [COM].[DIM_InventLocation]      AS loc WITH (NOLOCK) ON loc.ID = f.COM_DIM_InventLocationRef
 {ej}
 WHERE loc.StateChart IS NOT NULL AND loc.StateChart <> ''
 {ew}
 GROUP BY loc.StateChart
 ORDER BY sl_percent DESC;"""
-    kw = dict(province=province,city=city,district=district,store_id=store_id,
-               ig1=ig1,ig2=ig2,ig3=ig3,ig4=ig4,ig5=ig5,cd=commerce_dept)
+    kw   = dict(province=province,city=city,district=district,store_id=store_id,
+                ig1=ig1,ig2=ig2,ig3=ig3,ig4=ig4,ig5=ig5,cd=commerce_dept)
     data = cached_query(filter_key("provinces", kw), sql, fp, CACHE_TTL_PROVINCE)
     return {"status": "ok", "level": "province", "data": data}
 
@@ -290,16 +324,16 @@ SELECT
     loc.CityChart                                   AS name_fa,{_AGG},
     AVG(TRY_CAST(loc.Latitude  AS FLOAT))           AS lat,
     AVG(TRY_CAST(loc.Longitude AS FLOAT))           AS lng
-FROM [SCM].[Fact_VendorServiceLevel]    AS f
-JOIN [COM].[DIM_InventLocation]         AS loc ON loc.ID = f.COM_DIM_InventLocationRef
+FROM [SCM].[Fact_VendorServiceLevel] AS f   WITH (NOLOCK)
+JOIN [COM].[DIM_InventLocation]      AS loc WITH (NOLOCK) ON loc.ID = f.COM_DIM_InventLocationRef
 {ej}
 WHERE loc.StateChart = ?
   AND loc.CityChart IS NOT NULL AND loc.CityChart <> ''
 {ew}
 GROUP BY loc.CityChart
 ORDER BY sl_percent DESC;"""
-    kw = dict(province=province,city=city,district=district,store_id=store_id,
-               ig1=ig1,ig2=ig2,ig3=ig3,ig4=ig4,ig5=ig5,cd=commerce_dept)
+    kw   = dict(province=province,city=city,district=district,store_id=store_id,
+                ig1=ig1,ig2=ig2,ig3=ig3,ig4=ig4,ig5=ig5,cd=commerce_dept)
     data = cached_query(filter_key(f"cities:{province}", kw), sql, (province,)+fp, CACHE_TTL_DETAIL)
     return {"status": "ok", "level": "city", "data": data}
 
@@ -324,15 +358,15 @@ SELECT
     ISNULL(NULLIF(loc.District, ''), N'نامشخص')    AS name_fa,{_AGG},
     AVG(TRY_CAST(loc.Latitude  AS FLOAT))           AS lat,
     AVG(TRY_CAST(loc.Longitude AS FLOAT))           AS lng
-FROM [SCM].[Fact_VendorServiceLevel]    AS f
-JOIN [COM].[DIM_InventLocation]         AS loc ON loc.ID = f.COM_DIM_InventLocationRef
+FROM [SCM].[Fact_VendorServiceLevel] AS f   WITH (NOLOCK)
+JOIN [COM].[DIM_InventLocation]      AS loc WITH (NOLOCK) ON loc.ID = f.COM_DIM_InventLocationRef
 {ej}
 WHERE loc.StateChart = ? AND loc.CityChart = ?
 {ew}
 GROUP BY ISNULL(NULLIF(loc.District, ''), N'نامشخص')
 ORDER BY sl_percent DESC;"""
-    kw = dict(province=province,city=city,district=district,store_id=store_id,
-               ig1=ig1,ig2=ig2,ig3=ig3,ig4=ig4,ig5=ig5,cd=commerce_dept)
+    kw   = dict(province=province,city=city,district=district,store_id=store_id,
+                ig1=ig1,ig2=ig2,ig3=ig3,ig4=ig4,ig5=ig5,cd=commerce_dept)
     data = cached_query(filter_key(f"districts:{province}:{city}", kw), sql, (province,city)+fp, CACHE_TTL_DETAIL)
     return {"status": "ok", "level": "district", "data": data}
 
@@ -358,8 +392,8 @@ SELECT
     loc.Name                                        AS name_fa,{_AGG},
     MAX(TRY_CAST(loc.Latitude  AS FLOAT))           AS lat,
     MAX(TRY_CAST(loc.Longitude AS FLOAT))           AS lng
-FROM [SCM].[Fact_VendorServiceLevel]    AS f
-JOIN [COM].[DIM_InventLocation]         AS loc ON loc.ID = f.COM_DIM_InventLocationRef
+FROM [SCM].[Fact_VendorServiceLevel] AS f   WITH (NOLOCK)
+JOIN [COM].[DIM_InventLocation]      AS loc WITH (NOLOCK) ON loc.ID = f.COM_DIM_InventLocationRef
 {ej}
 WHERE loc.StateChart = ?
   AND loc.CityChart  = ?
@@ -367,8 +401,8 @@ WHERE loc.StateChart = ?
 {ew}
 GROUP BY loc.BKInventLocationId, loc.Name
 ORDER BY sl_percent DESC;"""
-    kw = dict(province=province,city=city,district=district,store_id=store_id,
-               ig1=ig1,ig2=ig2,ig3=ig3,ig4=ig4,ig5=ig5,cd=commerce_dept)
+    kw   = dict(province=province,city=city,district=district,store_id=store_id,
+                ig1=ig1,ig2=ig2,ig3=ig3,ig4=ig4,ig5=ig5,cd=commerce_dept)
     data = cached_query(filter_key(f"stores:{province}:{city}:{district}", kw), sql, (province,city,district)+fp, CACHE_TTL_DETAIL)
     return {"status": "ok", "level": "store", "data": data}
 
@@ -376,10 +410,18 @@ ORDER BY sl_percent DESC;"""
 # ─── Cache management ──────────────────────────────────────────────────────────
 @app.delete("/api/cache")
 def clear_cache():
+    global _loc_combos, _itm_combos, _loc_combos_ts, _itm_combos_ts
     _cache.clear()
+    _loc_combos_ts = 0.0
+    _itm_combos_ts = 0.0
     return {"status": "ok", "message": "cache cleared"}
 
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    return {
+        "status": "ok",
+        "loc_combos": len(_loc_combos),
+        "itm_combos": len(_itm_combos),
+        "cached_keys": len(_cache),
+    }
