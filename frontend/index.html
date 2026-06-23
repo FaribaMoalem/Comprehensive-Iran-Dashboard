@@ -1,0 +1,748 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>داشبورد سرویس لول وندور</title>
+  <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <style>
+    :root {
+      --bg:#060b18; --surface:#0d1b2e; --card:rgba(13,27,46,.88);
+      --b1:rgba(255,255,255,.07); --b2:rgba(255,255,255,.14);
+      --t1:#f1f5f9; --t2:#94a3b8; --t3:#475569;
+    }
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:'Vazirmatn',Tahoma,sans-serif;background:var(--bg);color:var(--t1);height:100vh;display:flex;flex-direction:column;overflow:hidden}
+
+    /* ── Header ── */
+    #header{background:linear-gradient(135deg,#06101f,#0d1b2e);border-bottom:1px solid var(--b2);padding:9px 18px;display:flex;justify-content:space-between;align-items:center;flex-shrink:0;box-shadow:0 2px 20px rgba(0,0,0,.6)}
+    .h-left{display:flex;align-items:center;gap:10px}
+    .dot{width:8px;height:8px;border-radius:50%;background:#22c55e;box-shadow:0 0 8px #22c55e;animation:pulse 2.2s infinite}
+    @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+    #page-title{font-size:14px;font-weight:600}
+    .h-right{display:flex;align-items:center;gap:10px}
+    #last-update{font-size:11px;color:var(--t3)}
+    #refresh-btn{background:rgba(255,255,255,.06);color:var(--t2);border:1px solid var(--b2);border-radius:7px;padding:4px 12px;font-size:11px;font-family:'Vazirmatn',Tahoma,sans-serif;cursor:pointer;transition:.2s}
+    #refresh-btn:hover{background:rgba(255,255,255,.12)}
+
+    /* ── Breadcrumb ── */
+    #breadcrumb{background:rgba(13,27,46,.7);padding:4px 18px;border-bottom:1px solid var(--b1);flex-shrink:0;display:flex;align-items:center;gap:5px}
+    .bc{color:var(--t3);cursor:pointer;font-size:12px;transition:color .15s}
+    .bc:hover{color:var(--t2)}
+    .bc.cur{color:#22c55e;cursor:default;font-weight:600}
+    .bc-sep{color:var(--t3);font-size:11px}
+
+    /* ── Filter bar ── */
+    #filter-bar{background:rgba(6,11,24,.92);border-bottom:1px solid var(--b2);padding:5px 14px;flex-shrink:0;display:flex;align-items:center;gap:5px;overflow-x:auto;min-height:38px;position:relative;z-index:300}
+    #filter-bar::-webkit-scrollbar{height:3px}
+    #filter-bar::-webkit-scrollbar-thumb{background:var(--b2)}
+    .fb-label{font-size:10px;color:var(--t3);font-weight:700;white-space:nowrap;letter-spacing:.5px;text-transform:uppercase;flex-shrink:0}
+    .fb-sep{width:1px;height:18px;background:var(--b2);flex-shrink:0;margin:0 3px}
+    .fb-group{font-size:9px;color:var(--t3);white-space:nowrap;flex-shrink:0}
+    #filter-badge{background:rgba(34,197,94,.15);border:1px solid rgba(34,197,94,.3);border-radius:5px;padding:1px 8px;font-size:10px;color:#22c55e;font-weight:600;white-space:nowrap;flex-shrink:0;display:none}
+    #filter-reset{background:rgba(239,68,68,.12);color:#f87171;border:1px solid rgba(239,68,68,.25);border-radius:7px;padding:2px 9px;font-size:11px;font-family:'Vazirmatn',Tahoma,sans-serif;cursor:pointer;white-space:nowrap;flex-shrink:0;height:26px;display:none;transition:.2s}
+    #filter-reset:hover{background:rgba(239,68,68,.22)}
+
+    /* ── Custom searchable select ── */
+    .ss{position:relative;flex-shrink:0}
+    .ss-btn{background:rgba(13,27,46,.98);color:var(--t3);border:1px solid var(--b2);border-radius:7px;padding:0 26px 0 8px;font-size:11px;font-family:'Vazirmatn',Tahoma,sans-serif;cursor:pointer;height:26px;min-width:108px;max-width:155px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:26px;position:relative;transition:border-color .15s,color .15s;text-align:right}
+    .ss-btn::after{content:'▾';position:absolute;left:7px;top:50%;transform:translateY(-50%);font-size:9px;color:var(--t3);transition:transform .2s}
+    .ss-btn.active{border-color:rgba(34,197,94,.5);color:var(--t1)}
+    .ss-btn.open::after{transform:translateY(-50%) rotate(180deg)}
+    /* Fixed-position popup — appended to body, not inside filter-bar */
+    .ss-popup{position:fixed;background:#0d1b2e;border:1px solid var(--b2);border-radius:9px;box-shadow:0 12px 32px rgba(0,0,0,.7);z-index:99999;overflow:hidden;min-width:160px}
+    .ss-search{width:100%;padding:7px 10px;background:rgba(6,11,24,.8);color:var(--t1);border:none;border-bottom:1px solid var(--b1);font-size:11px;font-family:'Vazirmatn',Tahoma,sans-serif;outline:none;direction:rtl}
+    .ss-search::placeholder{color:var(--t3)}
+    .ss-list{max-height:220px;overflow-y:auto}
+    .ss-list::-webkit-scrollbar{width:3px}
+    .ss-list::-webkit-scrollbar-thumb{background:var(--b2);border-radius:2px}
+    .ss-opt{padding:7px 11px;font-size:11px;color:var(--t2);cursor:pointer;transition:background .1s;white-space:nowrap}
+    .ss-opt:hover{background:rgba(255,255,255,.06);color:var(--t1)}
+    .ss-opt.sel{background:rgba(34,197,94,.12);color:#22c55e;font-weight:600}
+    .ss-empty{padding:10px 11px;font-size:11px;color:var(--t3);text-align:center}
+    .ss-loading-msg{padding:10px 11px;font-size:11px;color:var(--t3);text-align:center;display:flex;align-items:center;justify-content:center;gap:7px}
+    /* loading state: pulsing green border on the button */
+    .ss-btn.loading{border-color:rgba(34,197,94,.35)!important;animation:ss-pulse 1s ease-in-out infinite}
+    @keyframes ss-pulse{0%,100%{border-color:rgba(34,197,94,.15)}50%{border-color:rgba(34,197,94,.55)}}
+    .ss-spin{width:10px;height:10px;border:1.5px solid rgba(34,197,94,.3);border-top-color:#22c55e;border-radius:50%;animation:rot .7s linear infinite;flex-shrink:0}
+
+    /* ── KPI ── */
+    #kpi-bar{display:grid;grid-template-columns:repeat(4,1fr);gap:7px;padding:7px 14px;background:var(--surface);border-bottom:1px solid var(--b1);flex-shrink:0}
+    .kpi{background:var(--card);border:1px solid var(--b1);border-radius:10px;padding:7px 12px;text-align:center}
+    .kv{font-size:17px;font-weight:700;color:#22c55e}
+    .kl{font-size:10px;color:var(--t3);margin-top:2px}
+
+    /* ── Layout ── */
+    #main{display:flex;flex:1;overflow:hidden}
+
+    /* ── Sidebar ── */
+    #sidebar{width:210px;background:rgba(6,11,24,.85);border-right:1px solid var(--b1);overflow-y:auto;flex-shrink:0}
+    #sidebar::-webkit-scrollbar{width:3px}
+    #sidebar::-webkit-scrollbar-thumb{background:var(--b2);border-radius:2px}
+    #sb-title{padding:7px 12px;font-size:10px;font-weight:700;color:var(--t3);border-bottom:1px solid var(--b1);position:sticky;top:0;background:rgba(6,11,24,.95);text-transform:uppercase;letter-spacing:1px}
+    .pi{display:flex;align-items:center;padding:5px 10px;border-bottom:1px solid rgba(255,255,255,.04);transition:background .12s;gap:5px}
+    .pi:hover,.pi.active{background:rgba(255,255,255,.06)}
+    .pi.click{cursor:pointer}
+    .pi-rank{font-size:10px;color:var(--t3);width:14px;flex-shrink:0;text-align:center}
+    .pi-name{font-size:11px;flex:1;color:var(--t2);font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .bb{width:30px;height:3px;background:rgba(255,255,255,.06);border-radius:2px;overflow:hidden;flex-shrink:0}
+    .bf{height:100%;border-radius:2px}
+    .pi-sl{font-size:11px;font-weight:700;min-width:30px;text-align:left;flex-shrink:0}
+
+    /* ── Map ── */
+    #map-wrap{flex:1;position:relative;overflow:hidden}
+    #lmap{width:100%;height:100%}
+
+    /* ── Tooltip ── */
+    #tip{display:none;position:absolute;background:rgba(6,11,24,.96);border:1px solid var(--b2);border-radius:11px;padding:11px 15px;pointer-events:none;z-index:9999;min-width:195px;font-size:12px;box-shadow:0 8px 28px rgba(0,0,0,.6)}
+    .tt{font-size:13px;font-weight:700;color:var(--t1);margin-bottom:8px;padding-bottom:6px;border-bottom:1px solid var(--b1)}
+    .tr{display:flex;justify-content:space-between;margin-bottom:4px;color:var(--t3)}
+    .tr span:last-child{font-weight:600;color:var(--t2)}
+    .th{color:var(--t3);font-size:10px;margin-top:6px;text-align:center;border-top:1px solid var(--b1);padding-top:5px}
+
+    /* ── Legend ── */
+    #legend{position:absolute;bottom:28px;left:12px;background:rgba(6,11,24,.9);border:1px solid var(--b1);border-radius:10px;padding:9px 13px;z-index:1000}
+    #legend h4{font-size:10px;color:var(--t3);margin-bottom:6px;font-weight:600;text-transform:uppercase;letter-spacing:.7px}
+    .li{display:flex;align-items:center;gap:7px;margin-bottom:3px;font-size:11px;color:var(--t2)}
+    .ld{width:10px;height:10px;border-radius:3px;flex-shrink:0}
+
+    /* ── Overlay ── */
+    #overlay{position:absolute;inset:0;background:rgba(6,11,24,.85);display:flex;align-items:center;justify-content:center;z-index:5000;flex-direction:column;gap:12px}
+    #overlay .msg{color:var(--t2);font-size:13px}
+    .spin{width:32px;height:32px;border:2px solid rgba(34,197,94,.2);border-top-color:#22c55e;border-radius:50%;animation:rot .8s linear infinite}
+    @keyframes rot{to{transform:rotate(360deg)}}
+
+    /* ── Leaflet overrides ── */
+    .leaflet-control-zoom a{background:rgba(13,27,46,.95)!important;color:var(--t2)!important;border-color:var(--b2)!important;font-family:'Vazirmatn',Tahoma,sans-serif!important}
+    .leaflet-control-zoom a:hover{background:rgba(13,27,46,1)!important;color:var(--t1)!important}
+    .leaflet-control-attribution{background:rgba(6,11,24,.6)!important;color:var(--t3)!important;font-size:9px!important}
+    .leaflet-control-attribution a{color:#475569!important}
+    .prov-lbl{background:none;border:none;color:rgba(255,255,255,.95);font-family:'Vazirmatn',Tahoma,sans-serif;font-weight:700;font-size:10px;text-shadow:0 1px 4px rgba(0,0,0,1),0 0 8px rgba(0,0,0,.8);text-align:center;pointer-events:none}
+    .leaflet-tooltip.sl-lbl{background:none!important;border:none!important;box-shadow:none!important;color:rgba(255,255,255,.95)!important;font-family:'Vazirmatn',Tahoma,sans-serif!important;font-weight:700!important;font-size:9px!important;padding:0!important;text-shadow:0 1px 3px rgba(0,0,0,.9)!important}
+    .leaflet-tooltip.sl-lbl::before{display:none!important}
+    .store-dot{border-radius:50%;border:2px solid rgba(255,255,255,.25);box-shadow:0 2px 6px rgba(0,0,0,.5)}
+  </style>
+</head>
+<body>
+
+<div id="header">
+  <div class="h-left"><div class="dot"></div><h1 id="page-title">سرویس لول وندور — استان‌های ایران</h1></div>
+  <div class="h-right">
+    <span id="last-update">در حال بارگذاری...</span>
+    <button id="refresh-btn" onclick="loadData()">↻ بروزرسانی</button>
+  </div>
+</div>
+
+<div id="breadcrumb"><span class="bc cur">ایران</span></div>
+
+<div id="filter-bar">
+  <span class="fb-label">فیلتر</span>
+
+  <span class="fb-group">موقعیت:</span>
+  <div class="ss" id="ss-province"></div>
+  <div class="ss" id="ss-city"></div>
+  <div class="ss" id="ss-district"></div>
+
+  <div class="fb-sep"></div>
+  <span class="fb-group">گروه کالا:</span>
+  <div class="ss" id="ss-ig1"></div>
+  <div class="ss" id="ss-ig2"></div>
+  <div class="ss" id="ss-ig3"></div>
+  <div class="ss" id="ss-ig4"></div>
+  <div class="ss" id="ss-ig5"></div>
+
+  <div class="fb-sep"></div>
+  <div class="ss" id="ss-cd"></div>
+
+  <div id="filter-badge">فیلتر فعال</div>
+  <button id="filter-reset" onclick="resetFilters()">✕ پاک کردن</button>
+</div>
+
+<div id="kpi-bar">
+  <div class="kpi"><div class="kv" id="k-avg">—</div><div class="kl">میانگین سرویس لول</div></div>
+  <div class="kpi"><div class="kv" id="k-best" style="color:#22c55e">—</div><div class="kl">بهترین</div></div>
+  <div class="kpi"><div class="kv" id="k-worst" style="color:#ef4444">—</div><div class="kl">ضعیف‌ترین</div></div>
+  <div class="kpi"><div class="kv" id="k-target">—</div><div class="kl">SL ≥ ۸۰٪</div></div>
+</div>
+
+<div id="main">
+  <div id="sidebar">
+    <div id="sb-title">رتبه‌بندی</div>
+    <div id="rank-list"></div>
+  </div>
+  <div id="map-wrap">
+    <div id="lmap"></div>
+    <div id="tip"></div>
+    <div id="legend">
+      <h4>سرویس لول</h4>
+      <div class="li"><div class="ld" style="background:#16a34a"></div>≥ ۸۵٪ عالی</div>
+      <div class="li"><div class="ld" style="background:#65a30d"></div>۷۵–۸۵٪ خوب</div>
+      <div class="li"><div class="ld" style="background:#ca8a04"></div>۶۵–۷۵٪ متوسط</div>
+      <div class="li"><div class="ld" style="background:#ea580c"></div>۵۵–۶۵٪ ضعیف</div>
+      <div class="li"><div class="ld" style="background:#dc2626"></div>&lt; ۵۵٪ بحرانی</div>
+    </div>
+    <div id="overlay"><div class="spin"></div><div class="msg">در حال اتصال...</div></div>
+  </div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+/* ═══════════════════════════════════════════════════════════
+   SearchSelect — custom searchable dropdown (fixed position)
+   ═══════════════════════════════════════════════════════════ */
+class SearchSelect {
+  constructor(containerId, placeholder, onChange) {
+    this.el          = document.getElementById(containerId);
+    this.placeholder = placeholder;
+    this.onChange    = onChange;
+    this._value      = '';
+    this._opts       = [];
+    this._popup      = null;
+    this._isLoading  = false;
+
+    this._btn = document.createElement('div');
+    this._btn.className = 'ss-btn';
+    this._btn.textContent = placeholder;
+    this._btn.addEventListener('click', e => { e.stopPropagation(); this._toggle(); });
+    this.el.appendChild(this._btn);
+  }
+
+  getValue()  { return this._value; }
+
+  setLoading(on) {
+    this._isLoading = on;
+    this._btn.classList.toggle('loading', on);
+    if (!on && this._popup) this._fillList(this._searchInput?.value || '');
+  }
+
+  setOptions(arr) {
+    this._opts = arr;
+    // clear value if it's no longer valid
+    if (this._value && !arr.includes(this._value)) this._setValue('');
+    // refresh open popup if any
+    if (this._popup) this._fillList(this._searchInput?.value || '');
+  }
+
+  reset() { this._setValue(''); }
+
+  _setValue(v) {
+    this._value = v;
+    this._btn.textContent = v || this.placeholder;
+    this._btn.classList.toggle('active', !!v);
+  }
+
+  _toggle() {
+    if (this._popup) { this._close(); return; }
+    this._open();
+  }
+
+  _open() {
+    // close any other open popup
+    document.querySelectorAll('.ss-popup').forEach(p => p.remove());
+
+    const rect = this._btn.getBoundingClientRect();
+    const popup = document.createElement('div');
+    popup.className = 'ss-popup';
+
+    // position below the button
+    const spaceBelow = window.innerHeight - rect.bottom - 8;
+    const maxH = Math.min(280, spaceBelow > 120 ? spaceBelow : rect.top - 8);
+    const popW = Math.max(rect.width, 175);
+
+    // align: if button is near right edge, align right; else align left
+    let left = rect.left;
+    if (left + popW > window.innerWidth - 8) left = rect.right - popW;
+
+    popup.style.cssText =
+      `top:${rect.bottom + 4}px;left:${left}px;width:${popW}px;max-height:${maxH}px`;
+
+    // search input
+    const inp = document.createElement('input');
+    inp.className     = 'ss-search';
+    inp.type          = 'text';
+    inp.placeholder   = 'جستجو...';
+    inp.autocomplete  = 'off';
+    inp.addEventListener('input', () => this._fillList(inp.value));
+    popup.appendChild(inp);
+    this._searchInput = inp;
+
+    // list container
+    const list = document.createElement('div');
+    list.className = 'ss-list';
+    popup.appendChild(list);
+    this._listEl = list;
+
+    document.body.appendChild(popup);
+    this._popup = popup;
+    this._btn.classList.add('open');
+
+    if (this._isLoading) {
+      list.innerHTML = '<div class="ss-loading-msg"><div class="ss-spin"></div>در حال بارگذاری...</div>';
+      inp.disabled = true;
+    } else {
+      this._fillList('');
+    }
+    inp.focus();
+
+    // close on outside click
+    setTimeout(() => {
+      this._outsideHandler = e => {
+        if (!popup.contains(e.target) && e.target !== this._btn) this._close();
+      };
+      document.addEventListener('click', this._outsideHandler);
+    }, 0);
+  }
+
+  _close() {
+    if (!this._popup) return;
+    this._popup.remove();
+    this._popup    = null;
+    this._listEl   = null;
+    this._searchInput = null;
+    this._btn.classList.remove('open');
+    if (this._outsideHandler) {
+      document.removeEventListener('click', this._outsideHandler);
+      this._outsideHandler = null;
+    }
+  }
+
+  _fillList(query) {
+    const q = query.trim().toLowerCase();
+    const list = this._listEl;
+    list.innerHTML = '';
+
+    const matches = this._opts.filter(o =>
+      !q || o.toLowerCase().includes(q) ||
+      // also match Persian digits
+      o.includes(query.trim())
+    );
+
+    // "all" option
+    const allDiv = document.createElement('div');
+    allDiv.className = 'ss-opt' + (!this._value ? ' sel' : '');
+    allDiv.textContent = this.placeholder;
+    allDiv.addEventListener('click', () => { this._setValue(''); this._close(); this.onChange(); });
+    list.appendChild(allDiv);
+
+    if (!matches.length && q) {
+      const em = document.createElement('div');
+      em.className = 'ss-empty';
+      em.textContent = 'موردی یافت نشد';
+      list.appendChild(em);
+      return;
+    }
+
+    matches.forEach(o => {
+      const d = document.createElement('div');
+      d.className = 'ss-opt' + (o === this._value ? ' sel' : '');
+      d.textContent = o;
+      d.addEventListener('click', () => { this._setValue(o); this._close(); this.onChange(); });
+      list.appendChild(d);
+    });
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════
+   App state & config
+   ═══════════════════════════════════════════════════════════ */
+const API_BASE   = 'http://localhost:8000/api/service-level';
+const REFRESH_MS = 5 * 60 * 1000;
+
+let currentData  = [];
+let currentLevel = 'province';
+let selectedPath = { province: null, city: null, district: null };
+
+const SB_LABELS = {
+  province:'رتبه‌بندی استان‌ها', city:'رتبه‌بندی شهرها',
+  district:'رتبه‌بندی مناطق',   store:'رتبه‌بندی فروشگاه‌ها'
+};
+
+const TIP = document.getElementById('tip');
+const MW  = document.getElementById('map-wrap');
+
+function clr(sl) {
+  if (sl >= 85) return '#16a34a';
+  if (sl >= 75) return '#65a30d';
+  if (sl >= 65) return '#ca8a04';
+  if (sl >= 55) return '#ea580c';
+  return '#dc2626';
+}
+
+/* ── Searchable selects ─────────────────────────────────────── */
+const SS = {};
+
+function initSelects() {
+  const defs = [
+    { key:'province', wrap:'ss-province', ph:'همه استان‌ها' },
+    { key:'city',     wrap:'ss-city',     ph:'همه شهرها'  },
+    { key:'district', wrap:'ss-district', ph:'همه مناطق'  },
+    { key:'ig1',      wrap:'ss-ig1',      ph:'سطح ۱'      },
+    { key:'ig2',      wrap:'ss-ig2',      ph:'سطح ۲'      },
+    { key:'ig3',      wrap:'ss-ig3',      ph:'سطح ۳'      },
+    { key:'ig4',      wrap:'ss-ig4',      ph:'سطح ۴'      },
+    { key:'ig5',      wrap:'ss-ig5',      ph:'سطح ۵'      },
+    { key:'cd',       wrap:'ss-cd',       ph:'همه دپارتمان‌ها' },
+  ];
+  defs.forEach(({ key, wrap, ph }) => {
+    SS[key] = new SearchSelect(wrap, ph, onFilterChange);
+  });
+}
+
+function getFilters() {
+  return {
+    province: SS.province.getValue(),
+    city:     SS.city.getValue(),
+    district: SS.district.getValue(),
+    ig1:      SS.ig1.getValue(),
+    ig2:      SS.ig2.getValue(),
+    ig3:      SS.ig3.getValue(),
+    ig4:      SS.ig4.getValue(),
+    ig5:      SS.ig5.getValue(),
+    cd:       SS.cd.getValue(),
+  };
+}
+
+function hasActiveFilters() {
+  return Object.values(getFilters()).some(v => v !== '');
+}
+
+function filtersToParams() {
+  const f = getFilters();
+  const p = new URLSearchParams();
+  if (f.province) p.set('province',      f.province);
+  if (f.city)     p.set('city',          f.city);
+  if (f.district) p.set('district',      f.district);
+  if (f.ig1)      p.set('ig1',           f.ig1);
+  if (f.ig2)      p.set('ig2',           f.ig2);
+  if (f.ig3)      p.set('ig3',           f.ig3);
+  if (f.ig4)      p.set('ig4',           f.ig4);
+  if (f.ig5)      p.set('ig5',           f.ig5);
+  if (f.cd)       p.set('commerce_dept', f.cd);
+  return p;
+}
+
+async function onFilterChange() {
+  updateFilterBadge();
+  // reload cascaded options first, then reload map data
+  await loadFilterOptions();
+  loadData();
+}
+
+function resetFilters() {
+  Object.values(SS).forEach(s => s.reset());
+  updateFilterBadge();
+  loadFilterOptions();
+  loadData();
+}
+
+function updateFilterBadge() {
+  const active = hasActiveFilters();
+  document.getElementById('filter-badge').style.display = active ? 'inline-block' : 'none';
+  document.getElementById('filter-reset').style.display = active ? 'inline-block' : 'none';
+}
+
+async function loadFilterOptions() {
+  const fp = filtersToParams();
+  // show loading on all dropdowns
+  Object.values(SS).forEach(s => s.setLoading(true));
+  try {
+    const r = await fetch(`http://localhost:8000/api/filter-options?${fp}`);
+    if (!r.ok) return;
+    const d = await r.json();
+    SS.province.setOptions(d.provinces      || []);
+    SS.city    .setOptions(d.cities         || []);
+    SS.district.setOptions(d.districts      || []);
+    SS.ig1     .setOptions(d.ig1            || []);
+    SS.ig2     .setOptions(d.ig2            || []);
+    SS.ig3     .setOptions(d.ig3            || []);
+    SS.ig4     .setOptions(d.ig4            || []);
+    SS.ig5     .setOptions(d.ig5            || []);
+    SS.cd      .setOptions(d.commerce_depts || []);
+  } catch(e) {
+    console.warn('filter-options:', e.message);
+  } finally {
+    Object.values(SS).forEach(s => s.setLoading(false));
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════
+   Province GeoJSON (simplified)
+   ═══════════════════════════════════════════════════════════ */
+const PROVINCES = {type:"FeatureCollection",features:[
+  {type:"Feature",properties:{name:"آذربایجان غربی"},  geometry:{type:"Polygon",coordinates:[[[44.06,38.00],[44.10,38.60],[44.00,39.20],[44.28,39.60],[44.80,39.78],[45.40,39.50],[46.00,39.50],[46.50,39.20],[46.80,38.70],[46.75,38.10],[46.55,37.40],[46.20,36.80],[45.50,36.55],[44.80,36.75],[44.20,37.20],[44.06,38.00]]]}},
+  {type:"Feature",properties:{name:"آذربایجان شرقی"}, geometry:{type:"Polygon",coordinates:[[[46.00,39.50],[46.50,39.20],[46.70,39.70],[47.20,39.78],[47.90,39.60],[48.35,39.00],[48.50,38.50],[48.10,37.80],[47.65,37.20],[47.00,37.10],[46.55,37.40],[46.75,38.10],[46.80,38.70],[46.50,39.20],[46.00,39.50]]]}},
+  {type:"Feature",properties:{name:"اردبیل"},           geometry:{type:"Polygon",coordinates:[[[48.35,39.00],[48.55,39.65],[49.00,39.75],[49.50,39.40],[49.55,38.70],[49.10,38.20],[48.80,37.90],[48.50,38.50],[48.35,39.00]]]}},
+  {type:"Feature",properties:{name:"گیلان"},            geometry:{type:"Polygon",coordinates:[[[48.80,37.90],[49.10,38.20],[49.55,38.70],[50.30,38.30],[50.80,37.40],[50.60,36.80],[50.10,36.40],[49.30,36.60],[48.70,37.00],[48.80,37.90]]]}},
+  {type:"Feature",properties:{name:"مازندران"},         geometry:{type:"Polygon",coordinates:[[[50.60,36.80],[50.80,37.40],[51.60,37.60],[52.50,37.50],[53.50,37.30],[54.00,37.10],[53.70,36.20],[52.80,36.00],[51.80,36.10],[51.10,36.50],[50.60,36.80]]]}},
+  {type:"Feature",properties:{name:"گلستان"},           geometry:{type:"Polygon",coordinates:[[[54.00,37.10],[54.50,37.80],[55.20,37.90],[55.80,37.70],[55.60,37.00],[55.20,36.70],[54.70,36.60],[54.20,36.70],[54.00,37.10]]]}},
+  {type:"Feature",properties:{name:"خراسان شمالی"},    geometry:{type:"Polygon",coordinates:[[[55.20,37.90],[55.80,38.30],[56.50,38.40],[57.50,38.20],[58.30,37.80],[58.00,37.20],[57.30,37.00],[56.30,36.90],[55.60,37.00],[55.20,37.90]]]}},
+  {type:"Feature",properties:{name:"خراسان رضوی"},     geometry:{type:"Polygon",coordinates:[[[57.30,37.00],[58.00,37.20],[58.30,37.80],[60.20,37.60],[60.80,37.20],[61.10,36.60],[61.20,35.80],[61.00,34.80],[60.40,34.10],[59.50,33.70],[58.50,33.60],[57.80,34.00],[57.60,35.00],[57.30,37.00]]]}},
+  {type:"Feature",properties:{name:"خراسان جنوبی"},    geometry:{type:"Polygon",coordinates:[[[57.80,34.00],[58.50,33.60],[59.50,33.70],[60.40,34.10],[61.00,33.20],[61.00,31.80],[60.50,30.80],[59.80,30.20],[59.00,30.00],[58.20,30.20],[57.80,31.00],[57.70,32.50],[57.80,34.00]]]}},
+  {type:"Feature",properties:{name:"سمنان"},            geometry:{type:"Polygon",coordinates:[[[51.80,36.10],[52.80,36.00],[53.70,36.20],[54.20,36.70],[54.70,36.60],[55.20,36.70],[56.30,36.90],[57.30,37.00],[57.60,35.00],[57.80,34.00],[57.70,32.50],[56.80,33.80],[55.50,34.50],[54.30,35.00],[53.00,35.20],[51.80,35.20],[51.80,36.10]]]}},
+  {type:"Feature",properties:{name:"زنجان"},            geometry:{type:"Polygon",coordinates:[[[47.00,37.10],[47.65,37.20],[48.10,37.80],[48.80,37.90],[48.70,37.00],[49.30,36.60],[49.30,36.10],[48.80,35.80],[48.20,35.80],[47.80,36.00],[47.30,36.30],[47.00,37.10]]]}},
+  {type:"Feature",properties:{name:"قزوین"},            geometry:{type:"Polygon",coordinates:[[[49.30,36.60],[50.10,36.40],[50.60,36.80],[51.10,36.50],[51.00,36.00],[50.50,35.50],[50.00,35.20],[49.30,35.50],[49.00,36.00],[49.30,36.60]]]}},
+  {type:"Feature",properties:{name:"البرز"},            geometry:{type:"Polygon",coordinates:[[[50.50,36.30],[51.10,36.50],[51.80,36.10],[51.80,35.60],[51.20,35.20],[50.70,35.30],[50.50,35.70],[50.50,36.30]]]}},
+  {type:"Feature",properties:{name:"تهران"},            geometry:{type:"Polygon",coordinates:[[[51.80,36.10],[52.80,36.00],[52.80,35.20],[52.20,34.80],[51.60,34.60],[51.00,35.00],[51.20,35.20],[51.80,35.60],[51.80,36.10]]]}},
+  {type:"Feature",properties:{name:"کردستان"},          geometry:{type:"Polygon",coordinates:[[[45.50,36.50],[46.00,36.60],[46.20,36.80],[46.55,37.40],[47.00,37.10],[47.30,36.30],[47.30,35.60],[47.00,35.00],[46.30,35.00],[45.80,35.20],[45.50,35.70],[45.50,36.50]]]}},
+  {type:"Feature",properties:{name:"همدان"},            geometry:{type:"Polygon",coordinates:[[[47.30,36.30],[47.80,36.00],[48.20,35.80],[48.80,35.80],[49.30,36.10],[49.30,35.50],[49.00,35.00],[48.50,34.40],[47.80,34.50],[47.30,35.00],[47.00,35.50],[47.30,36.30]]]}},
+  {type:"Feature",properties:{name:"قم"},               geometry:{type:"Polygon",coordinates:[[[50.70,35.80],[51.00,36.00],[51.50,35.80],[51.80,35.60],[51.20,35.20],[51.00,35.00],[50.50,35.00],[50.20,35.30],[50.50,35.70],[50.70,35.80]]]}},
+  {type:"Feature",properties:{name:"مرکزی"},            geometry:{type:"Polygon",coordinates:[[[49.00,35.50],[49.30,35.50],[50.00,35.20],[50.50,35.50],[50.70,35.80],[50.50,35.00],[50.20,35.30],[50.20,34.00],[49.80,33.60],[49.00,33.50],[48.60,34.00],[48.50,34.40],[49.00,35.00],[49.00,35.50]]]}},
+  {type:"Feature",properties:{name:"کرمانشاه"},         geometry:{type:"Polygon",coordinates:[[[45.80,35.20],[46.30,35.00],[47.00,35.00],[47.30,34.30],[47.00,33.80],[46.50,33.50],[46.00,33.70],[45.60,33.80],[45.50,34.30],[45.80,35.20]]]}},
+  {type:"Feature",properties:{name:"ایلام"},            geometry:{type:"Polygon",coordinates:[[[45.50,34.30],[45.60,33.80],[46.00,33.70],[46.50,33.50],[47.00,33.00],[46.80,32.50],[46.20,32.30],[45.70,32.50],[45.20,33.00],[45.30,33.70],[45.50,34.30]]]}},
+  {type:"Feature",properties:{name:"لرستان"},           geometry:{type:"Polygon",coordinates:[[[47.30,35.00],[47.80,34.50],[48.50,34.40],[49.00,34.00],[48.80,33.30],[48.30,32.80],[47.70,32.80],[47.20,33.20],[47.00,33.80],[47.30,34.30],[47.30,35.00]]]}},
+  {type:"Feature",properties:{name:"خوزستان"},          geometry:{type:"Polygon",coordinates:[[[47.20,33.20],[47.70,32.80],[48.30,32.80],[48.80,33.30],[49.00,34.00],[49.80,33.60],[50.20,34.00],[50.50,33.00],[50.60,32.00],[50.20,31.00],[49.80,30.50],[49.20,30.00],[48.50,30.00],[48.00,30.50],[47.50,31.20],[47.00,32.00],[46.80,32.50],[47.20,33.20]]]}},
+  {type:"Feature",properties:{name:"اصفهان"},           geometry:{type:"Polygon",coordinates:[[[49.80,33.60],[50.20,34.00],[50.50,35.00],[51.00,35.00],[51.50,34.60],[52.20,34.80],[52.80,35.20],[53.00,35.20],[54.30,35.00],[55.50,34.50],[55.50,33.50],[54.50,32.50],[53.50,31.80],[52.50,31.20],[51.80,31.00],[51.20,31.50],[50.80,32.30],[50.20,33.00],[50.50,33.00],[49.80,33.60]]]}},
+  {type:"Feature",properties:{name:"چهارمحال و بختیاری"},geometry:{type:"Polygon",coordinates:[[[50.80,32.30],[51.20,31.50],[51.80,31.00],[51.80,30.40],[51.20,30.40],[50.80,31.00],[50.50,31.50],[50.50,32.30],[50.80,32.30]]]}},
+  {type:"Feature",properties:{name:"کهگیلویه و بویراحمد"},geometry:{type:"Polygon",coordinates:[[[50.80,31.00],[51.20,30.40],[51.80,30.40],[51.80,29.80],[51.30,29.50],[50.80,29.50],[50.30,30.00],[50.30,31.00],[50.80,31.00]]]}},
+  {type:"Feature",properties:{name:"بوشهر"},            geometry:{type:"Polygon",coordinates:[[[50.20,31.00],[50.80,31.00],[50.30,30.00],[50.30,29.50],[50.00,28.80],[49.80,28.50],[49.50,28.50],[49.30,29.00],[49.30,29.80],[50.20,31.00]]]}},
+  {type:"Feature",properties:{name:"فارس"},             geometry:{type:"Polygon",coordinates:[[[51.80,31.00],[52.50,31.20],[53.50,31.80],[54.50,32.50],[55.50,31.80],[55.80,31.00],[55.50,30.20],[54.50,29.00],[53.50,28.00],[52.50,28.50],[52.00,29.00],[51.80,29.80],[51.80,30.40],[51.80,31.00]]]}},
+  {type:"Feature",properties:{name:"هرمزگان"},          geometry:{type:"Polygon",coordinates:[[[55.50,30.20],[55.80,31.00],[57.00,30.50],[58.00,29.00],[58.80,27.50],[58.00,26.50],[57.00,26.00],[56.00,25.80],[55.00,26.50],[54.20,27.00],[53.50,28.00],[54.50,29.00],[55.50,30.20]]]}},
+  {type:"Feature",properties:{name:"یزد"},              geometry:{type:"Polygon",coordinates:[[[54.30,35.00],[55.50,34.50],[55.50,33.50],[56.80,33.80],[57.70,32.50],[57.80,31.00],[57.00,30.50],[55.80,31.00],[55.50,31.80],[54.50,32.50],[53.50,31.80],[53.50,32.80],[53.00,34.00],[54.30,35.00]]]}},
+  {type:"Feature",properties:{name:"کرمان"},            geometry:{type:"Polygon",coordinates:[[[57.80,31.00],[58.20,30.20],[59.00,30.00],[59.80,30.20],[60.50,30.80],[61.00,31.80],[61.00,30.50],[60.50,28.80],[59.50,27.50],[58.80,27.50],[58.00,29.00],[57.00,30.50],[57.80,31.00]]]}},
+  {type:"Feature",properties:{name:"سیستان و بلوچستان"},geometry:{type:"Polygon",coordinates:[[[60.50,30.80],[61.00,31.80],[61.50,31.50],[62.50,31.50],[63.20,30.00],[63.30,27.80],[62.50,26.00],[61.50,25.50],[60.50,25.50],[59.50,25.50],[59.00,26.50],[59.50,27.50],[60.50,28.80],[61.00,30.50],[60.50,30.80]]]}}
+]};
+
+/* ═══════════════════════════════════════════════════════════
+   Leaflet map
+   ═══════════════════════════════════════════════════════════ */
+const map = L.map('lmap', { center:[33,53], zoom:5, zoomControl:false, preferCanvas:true });
+L.control.zoom({ position:'bottomright' }).addTo(map);
+L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+  attribution:'© OpenStreetMap © CARTO', maxZoom:19, subdomains:'abcd'
+}).addTo(map);
+
+let geoLayer = null, bubbleLayer = null;
+
+function clearLayers() {
+  if (geoLayer)    { map.removeLayer(geoLayer);   geoLayer    = null; }
+  if (bubbleLayer) { map.removeLayer(bubbleLayer); bubbleLayer = null; }
+  map.eachLayer(l => { if (l._slLabel) map.removeLayer(l); });
+}
+
+/* ── Routing ──────────────────────────────────────────────── */
+function buildUrl() {
+  const fp = filtersToParams();
+  const { province, city, district } = selectedPath;
+  if (currentLevel === 'province') return `${API_BASE}?${fp}`;
+  if (currentLevel === 'city')     { fp.set('province', province); return `${API_BASE}/cities?${fp}`; }
+  if (currentLevel === 'district') { fp.set('province', province); fp.set('city', city); return `${API_BASE}/districts?${fp}`; }
+  fp.set('province', province); fp.set('city', city); fp.set('district', district);
+  return `${API_BASE}/stores?${fp}`;
+}
+
+function drillDown(item) {
+  if      (currentLevel==='province') { selectedPath.province=item.name_fa; currentLevel='city'; }
+  else if (currentLevel==='city')     { selectedPath.city=item.name_fa;     currentLevel='district'; }
+  else if (currentLevel==='district') { selectedPath.district=item.name_fa; currentLevel='store'; }
+  else return;
+  loadData();
+}
+
+function drillUp(to) {
+  currentLevel = to;
+  if (to==='province') selectedPath={province:null,city:null,district:null};
+  else if (to==='city')     { selectedPath.city=null; selectedPath.district=null; }
+  else if (to==='district') selectedPath.district=null;
+  loadData();
+}
+
+/* ── Data ──────────────────────────────────────────────────── */
+async function loadData() {
+  showOverlay('در حال دریافت داده...');
+  try {
+    const r = await fetch(buildUrl());
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    currentData = (await r.json()).data;
+    renderAll(currentData);
+    document.getElementById('last-update').textContent =
+      'بروزرسانی: ' + new Date().toLocaleTimeString('fa-IR');
+    hideOverlay();
+  } catch(e) {
+    showOverlay(`خطا: ${e.message}`, true);
+  }
+}
+
+/* ── Render ─────────────────────────────────────────────────── */
+function renderAll(data) {
+  const sorted = [...data].sort((a,b) => b.sl_percent-a.sl_percent);
+  updateBreadcrumb(); updateTitles();
+  renderKPIs(sorted); renderSidebar(sorted); renderMap(data);
+}
+
+function updateBreadcrumb() {
+  const steps = [{label:'ایران',level:'province'}];
+  if (selectedPath.province) steps.push({label:selectedPath.province,level:'city'});
+  if (selectedPath.city)     steps.push({label:selectedPath.city,    level:'district'});
+  if (selectedPath.district) steps.push({label:selectedPath.district,level:'store'});
+  document.getElementById('breadcrumb').innerHTML = steps.map((s,i) => {
+    const cur = i===steps.length-1;
+    return (i>0?'<span class="bc-sep">›</span>':'')+
+      `<span class="bc${cur?' cur':''}" ${cur?'':` onclick="drillUp('${s.level}')"`}>${s.label}</span>`;
+  }).join('');
+}
+
+function updateTitles() {
+  const note = hasActiveFilters() ? ' ★' : '';
+  let t = 'سرویس لول وندور — استان‌های ایران';
+  if (currentLevel==='city')     t = `شهرهای ${selectedPath.province}`;
+  if (currentLevel==='district') t = `مناطق ${selectedPath.city} — ${selectedPath.province}`;
+  if (currentLevel==='store')    t = `فروشگاه‌های ${selectedPath.district} — ${selectedPath.city}`;
+  document.getElementById('page-title').textContent = t + note;
+  document.getElementById('sb-title').textContent   = SB_LABELS[currentLevel];
+}
+
+function renderKPIs(sorted) {
+  if (!sorted.length) return;
+  const avg = Math.round(sorted.reduce((s,p)=>s+p.sl_percent,0)/sorted.length);
+  document.getElementById('k-avg').textContent    = avg+'٪';
+  document.getElementById('k-best').textContent   = sorted[0].name_fa+'  '+Math.round(sorted[0].sl_percent)+'٪';
+  document.getElementById('k-worst').textContent  = sorted.at(-1).name_fa+'  '+Math.round(sorted.at(-1).sl_percent)+'٪';
+  document.getElementById('k-target').textContent = sorted.filter(p=>p.sl_percent>=80).length+' / '+sorted.length;
+}
+
+function renderSidebar(sorted) {
+  const el  = document.getElementById('rank-list');
+  const can = currentLevel!=='store';
+  el.innerHTML='';
+  sorted.forEach((p,i)=>{
+    const sl=Math.round(p.sl_percent),c=clr(sl);
+    const d=document.createElement('div');
+    d.className='pi'+(can?' click':''); d.id='pi-'+i;
+    d.innerHTML=`<span class="pi-rank">${i+1}</span>
+      <span class="pi-name" title="${p.name_fa}">${p.name_fa}</span>
+      <div class="bb"><div class="bf" style="width:${sl}%;background:${c}"></div></div>
+      <span class="pi-sl" style="color:${c}">${sl}٪</span>`;
+    if(can) d.onclick=()=>drillDown(p);
+    el.appendChild(d);
+  });
+}
+
+/* ── Map rendering ──────────────────────────────────────────── */
+function renderMap(data) {
+  clearLayers();
+  if (currentLevel==='province') renderProvince(data);
+  else renderBubbles(data);
+}
+
+function renderProvince(data) {
+  const pMap={};
+  data.forEach(d=>pMap[d.name_fa]=d);
+  const sorted=[...data].sort((a,b)=>b.sl_percent-a.sl_percent);
+
+  geoLayer=L.geoJSON(PROVINCES,{
+    style:feat=>{
+      const p=pMap[feat.properties.name],sl=p?Math.round(p.sl_percent):null;
+      return{fillColor:sl!==null?clr(sl):'#1a2a3a',fillOpacity:sl!==null?.72:.2,color:'rgba(6,11,24,.75)',weight:1.5};
+    },
+    onEachFeature:(feat,layer)=>{
+      const p=pMap[feat.properties.name];
+      if(!p) return;
+      const rank=sorted.findIndex(s=>s.name_fa===p.name_fa);
+      layer.on({
+        mouseover:e=>{layer.setStyle({fillOpacity:.92,weight:2,color:'rgba(255,255,255,.2)'});hilite(rank);showTip(e.originalEvent,p);},
+        mousemove:e=>moveTip(e.originalEvent),
+        mouseout:()=>{geoLayer.resetStyle(layer);hideTip();},
+        click:()=>{hideTip();drillDown(p);}
+      });
+      const coords=feat.geometry.coordinates[0];
+      let cx=0,cy=0;
+      coords.forEach(([lng,lat])=>{cx+=lng;cy+=lat;});
+      const m=L.marker([cy/coords.length,cx/coords.length],{
+        icon:L.divIcon({html:`<div class="prov-lbl">${Math.round(p.sl_percent)}٪</div>`,className:'',iconSize:[36,16],iconAnchor:[18,8]}),
+        interactive:false,zIndexOffset:200
+      });
+      m._slLabel=true;
+      m.addTo(map);
+    }
+  }).addTo(map);
+  try{map.fitBounds(geoLayer.getBounds(),{padding:[16,16]});}catch(e){}
+}
+
+function renderBubbles(data) {
+  const sorted=[...data].sort((a,b)=>b.sl_percent-a.sl_percent);
+  const canDrill=currentLevel!=='store', isStore=currentLevel==='store';
+  const markers=[];
+
+  data.forEach(p=>{
+    if(!p.lat||!p.lng||isNaN(p.lat)||isNaN(p.lng)) return;
+    const sl=Math.round(p.sl_percent),c=clr(sl);
+    const rank=sorted.findIndex(s=>s.name_fa===p.name_fa);
+    let marker;
+
+    if(isStore){
+      marker=L.marker([p.lat,p.lng],{
+        icon:L.divIcon({html:`<div class="store-dot" style="width:13px;height:13px;background:${c}"></div>`,className:'',iconSize:[13,13],iconAnchor:[6,6]}),
+        zIndexOffset:100
+      });
+    } else {
+      const r=Math.max(8,5+(sl-40)*.14);
+      marker=L.circleMarker([p.lat,p.lng],{radius:r,fillColor:c,fillOpacity:.85,color:'rgba(255,255,255,.2)',weight:1.5});
+      marker.bindTooltip(sl+'٪',{permanent:true,direction:'center',className:'sl-lbl',offset:[0,0]});
+    }
+
+    marker.on('mouseover',e=>{hilite(rank);showTip(e.originalEvent||e,p);});
+    marker.on('mousemove',e=>moveTip(e.originalEvent||e));
+    marker.on('mouseout',()=>hideTip());
+    if(canDrill) marker.on('click',()=>{hideTip();drillDown(p);});
+    markers.push(marker);
+  });
+
+  bubbleLayer=L.featureGroup(markers).addTo(map);
+  if(markers.length){
+    try{
+      const maxZ=isStore?16:currentLevel==='district'?11:9;
+      map.fitBounds(bubbleLayer.getBounds(),{padding:[50,50],maxZoom:maxZ});
+    }catch(e){}
+  }
+}
+
+/* ── Tooltip ─────────────────────────────────────────────────── */
+function showTip(e,p){
+  const sl=Math.round(p.sl_percent),c=clr(sl);
+  const diff=sl-Math.round(p.target_percent),dc=diff>=0?'#22c55e':'#ef4444';
+  TIP.innerHTML=`<div class="tt">${p.name_fa}</div>
+    <div class="tr"><span>سرویس لول</span><span style="color:${c};font-size:14px">${sl}٪</span></div>
+    <div class="tr"><span>هدف</span><span>${Math.round(p.target_percent)}٪</span></div>
+    <div class="tr"><span>انحراف</span><span style="color:${dc}">${diff>=0?'+':''}${diff}٪</span></div>
+    <div class="tr"><span>وندور</span><span>${p.vendor_count.toLocaleString()}</span></div>
+    <div class="tr"><span>سفارش</span><span>${p.total_orders.toLocaleString()}</span></div>
+    ${currentLevel!=='store'?'<div class="th">کلیک برای مشاهده جزئیات</div>':''}`;
+  TIP.style.display='block'; moveTip(e);
+}
+function moveTip(e){
+  const r=MW.getBoundingClientRect(),W=MW.clientWidth;
+  let tx=e.clientX-r.left+14,ty=e.clientY-r.top-85;
+  if(tx+210>W) tx=e.clientX-r.left-215;
+  if(ty<0) ty=e.clientY-r.top+14;
+  TIP.style.left=tx+'px'; TIP.style.top=ty+'px';
+}
+function hideTip(){
+  TIP.style.display='none';
+  document.querySelectorAll('.pi').forEach(el=>el.classList.remove('active'));
+}
+function hilite(rank){
+  document.querySelectorAll('.pi').forEach(el=>el.classList.remove('active'));
+  document.getElementById('pi-'+rank)?.classList.add('active');
+  document.getElementById('pi-'+rank)?.scrollIntoView({block:'nearest'});
+}
+
+/* ── Overlay ─────────────────────────────────────────────────── */
+function showOverlay(msg,isErr=false){
+  const ov=document.getElementById('overlay');
+  ov.innerHTML=isErr
+    ?`<div style="color:#ef4444;font-size:13px;text-align:center;padding:0 20px">${msg}</div>`
+    :`<div class="spin"></div><div class="msg">${msg}</div>`;
+  ov.style.display='flex';
+}
+function hideOverlay(){document.getElementById('overlay').style.display='none';}
+
+/* ── Init ───────────────────────────────────────────────────── */
+map.on('resize',()=>map.invalidateSize());
+initSelects();
+loadFilterOptions();
+loadData();
+setInterval(loadData, REFRESH_MS);
+</script>
+</body>
+</html>
