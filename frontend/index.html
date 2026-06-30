@@ -60,6 +60,7 @@
     .ss-opt{padding:7px 11px;font-size:11px;color:var(--t2);cursor:pointer;transition:background .1s;white-space:nowrap}
     .ss-opt:hover{background:rgba(255,255,255,.06);color:var(--t1)}
     .ss-opt.sel{background:rgba(34,197,94,.12);color:#22c55e;font-weight:600}
+    .ss-opt.sel::before{content:'✓ ';font-weight:700}
     .ss-empty{padding:10px 11px;font-size:11px;color:var(--t3);text-align:center}
     .ss-loading-msg{padding:10px 11px;font-size:11px;color:var(--t3);text-align:center;display:flex;align-items:center;justify-content:center;gap:7px}
     /* loading state: pulsing green border on the button */
@@ -139,6 +140,12 @@
 <div id="filter-bar">
   <span class="fb-label">فیلتر</span>
 
+  <span class="fb-group">تاریخ:</span>
+  <div class="ss" id="ss-year"></div>
+  <div class="ss" id="ss-month"></div>
+  <div class="ss" id="ss-day"></div>
+
+  <div class="fb-sep"></div>
   <span class="fb-group">موقعیت:</span>
   <div class="ss" id="ss-province"></div>
   <div class="ss" id="ss-city"></div>
@@ -196,7 +203,7 @@ class SearchSelect {
     this.el          = document.getElementById(containerId);
     this.placeholder = placeholder;
     this.onChange    = onChange;
-    this._value      = '';
+    this._values     = new Set();
     this._opts       = [];
     this._popup      = null;
     this._isLoading  = false;
@@ -208,7 +215,7 @@ class SearchSelect {
     this.el.appendChild(this._btn);
   }
 
-  getValue()  { return this._value; }
+  getValue() { return [...this._values]; }
 
   setLoading(on) {
     this._isLoading = on;
@@ -217,19 +224,36 @@ class SearchSelect {
   }
 
   setOptions(arr) {
-    this._opts = arr;
-    // clear value if it's no longer valid
-    if (this._value && !arr.includes(this._value)) this._setValue('');
-    // refresh open popup if any
+    this._opts = arr.map(o =>
+      typeof o === 'object' && o !== null ? { v: String(o.v), label: String(o.label) } : { v: String(o), label: String(o) }
+    );
+    const valid = new Set(this._opts.map(o => o.v));
+    this._values = new Set([...this._values].filter(v => valid.has(v)));
+    this._updateBtn();
     if (this._popup) this._fillList(this._searchInput?.value || '');
   }
 
-  reset() { this._setValue(''); }
+  reset() {
+    this._values.clear();
+    this._updateBtn();
+  }
 
-  _setValue(v) {
-    this._value = v;
-    this._btn.textContent = v || this.placeholder;
-    this._btn.classList.toggle('active', !!v);
+  _labelFor(v) {
+    return this._opts.find(o => o.v === v)?.label || v;
+  }
+
+  _updateBtn() {
+    const n = this._values.size;
+    if (!n) {
+      this._btn.textContent = this.placeholder;
+      this._btn.classList.remove('active');
+    } else if (n === 1) {
+      this._btn.textContent = this._labelFor([...this._values][0]);
+      this._btn.classList.add('active');
+    } else {
+      this._btn.textContent = n + ' مورد';
+      this._btn.classList.add('active');
+    }
   }
 
   _toggle() {
@@ -238,26 +262,22 @@ class SearchSelect {
   }
 
   _open() {
-    // close any other open popup
     document.querySelectorAll('.ss-popup').forEach(p => p.remove());
 
     const rect = this._btn.getBoundingClientRect();
     const popup = document.createElement('div');
     popup.className = 'ss-popup';
 
-    // position below the button
     const spaceBelow = window.innerHeight - rect.bottom - 8;
     const maxH = Math.min(280, spaceBelow > 120 ? spaceBelow : rect.top - 8);
     const popW = Math.max(rect.width, 175);
 
-    // align: if button is near right edge, align right; else align left
     let left = rect.left;
     if (left + popW > window.innerWidth - 8) left = rect.right - popW;
 
     popup.style.cssText =
       `top:${rect.bottom + 4}px;left:${left}px;width:${popW}px;max-height:${maxH}px`;
 
-    // search input
     const inp = document.createElement('input');
     inp.className     = 'ss-search';
     inp.type          = 'text';
@@ -267,7 +287,6 @@ class SearchSelect {
     popup.appendChild(inp);
     this._searchInput = inp;
 
-    // list container
     const list = document.createElement('div');
     list.className = 'ss-list';
     popup.appendChild(list);
@@ -285,7 +304,6 @@ class SearchSelect {
     }
     inp.focus();
 
-    // close on outside click
     setTimeout(() => {
       this._outsideHandler = e => {
         if (!popup.contains(e.target) && e.target !== this._btn) this._close();
@@ -307,22 +325,32 @@ class SearchSelect {
     }
   }
 
+  _toggleVal(v) {
+    if (this._values.has(v)) this._values.delete(v);
+    else this._values.add(v);
+    this._updateBtn();
+    this.onChange();
+  }
+
   _fillList(query) {
     const q = query.trim().toLowerCase();
     const list = this._listEl;
     list.innerHTML = '';
 
     const matches = this._opts.filter(o =>
-      !q || o.toLowerCase().includes(q) ||
-      // also match Persian digits
-      o.includes(query.trim())
+      !q || o.label.toLowerCase().includes(q) || o.v.includes(query.trim()) || o.label.includes(query.trim())
     );
 
-    // "all" option
     const allDiv = document.createElement('div');
-    allDiv.className = 'ss-opt' + (!this._value ? ' sel' : '');
+    allDiv.className = 'ss-opt' + (!this._values.size ? ' sel' : '');
     allDiv.textContent = this.placeholder;
-    allDiv.addEventListener('click', () => { this._setValue(''); this._close(); this.onChange(); });
+    allDiv.addEventListener('click', e => {
+      e.stopPropagation();
+      this._values.clear();
+      this._updateBtn();
+      this._close();
+      this.onChange();
+    });
     list.appendChild(allDiv);
 
     if (!matches.length && q) {
@@ -335,9 +363,13 @@ class SearchSelect {
 
     matches.forEach(o => {
       const d = document.createElement('div');
-      d.className = 'ss-opt' + (o === this._value ? ' sel' : '');
-      d.textContent = o;
-      d.addEventListener('click', () => { this._setValue(o); this._close(); this.onChange(); });
+      d.className = 'ss-opt' + (this._values.has(o.v) ? ' sel' : '');
+      d.textContent = o.label;
+      d.addEventListener('click', e => {
+        e.stopPropagation();
+        this._toggleVal(o.v);
+        d.classList.toggle('sel', this._values.has(o.v));
+      });
       list.appendChild(d);
     });
   }
@@ -348,6 +380,8 @@ class SearchSelect {
    ═══════════════════════════════════════════════════════════ */
 const API_BASE   = 'http://localhost:8000/api/service-level';
 const REFRESH_MS = 5 * 60 * 1000;
+const DEFAULT_YR_FROM = 1399;
+const DEFAULT_YR_TO   = 1405;
 
 let currentData  = [];
 let currentLevel = 'province';
@@ -369,11 +403,17 @@ function clr(sl) {
   return '#dc2626';
 }
 
+const FA_MONTHS = ['','فروردین','اردیبهشت','خرداد','تیر','مرداد','شهریور','مهر','آبان','آذر','دی','بهمن','اسفند'];
+function fmtMonth(m) { return m + ' — ' + (FA_MONTHS[+m] || ''); }
+
 /* ── Searchable selects ─────────────────────────────────────── */
 const SS = {};
 
 function initSelects() {
   const defs = [
+    { key:'year',     wrap:'ss-year',     ph:`${DEFAULT_YR_FROM}–${DEFAULT_YR_TO}` },
+    { key:'month',    wrap:'ss-month',    ph:'همه ماه‌ها'  },
+    { key:'day',      wrap:'ss-day',      ph:'همه روزها'   },
     { key:'province', wrap:'ss-province', ph:'همه استان‌ها' },
     { key:'city',     wrap:'ss-city',     ph:'همه شهرها'  },
     { key:'district', wrap:'ss-district', ph:'همه مناطق'  },
@@ -391,6 +431,9 @@ function initSelects() {
 
 function getFilters() {
   return {
+    year:     SS.year.getValue(),
+    month:    SS.month.getValue(),
+    day:      SS.day.getValue(),
     province: SS.province.getValue(),
     city:     SS.city.getValue(),
     district: SS.district.getValue(),
@@ -404,21 +447,36 @@ function getFilters() {
 }
 
 function hasActiveFilters() {
-  return Object.values(getFilters()).some(v => v !== '');
+  const f = getFilters();
+  return Object.entries(f).some(([k, v]) => {
+    if (k === 'year' && (!v || !v.length)) return false;
+    return v && v.length > 0;
+  });
 }
+
+function dateFilterLabel() {
+  const f = getFilters();
+  const y = f.year || [], m = f.month || [], d = f.day || [];
+  if (d.length && m.length && y.length) return y.join('،') + '/' + m.join('،') + '/' + d.join('،');
+  if (m.length && y.length)             return y.join('،') + '/' + m.join('،');
+  if (y.length === 1)                   return y[0];
+  if (y.length > 1)                     return y.length + ' سال';
+  return `${DEFAULT_YR_FROM}–${DEFAULT_YR_TO}`;
+}
+
+const FILTER_PARAM_KEYS = {
+  year: 'year', month: 'month', day: 'day',
+  province: 'province', city: 'city', district: 'district',
+  ig1: 'ig1', ig2: 'ig2', ig3: 'ig3', ig4: 'ig4', ig5: 'ig5',
+  cd: 'commerce_dept',
+};
 
 function filtersToParams() {
   const f = getFilters();
   const p = new URLSearchParams();
-  if (f.province) p.set('province',      f.province);
-  if (f.city)     p.set('city',          f.city);
-  if (f.district) p.set('district',      f.district);
-  if (f.ig1)      p.set('ig1',           f.ig1);
-  if (f.ig2)      p.set('ig2',           f.ig2);
-  if (f.ig3)      p.set('ig3',           f.ig3);
-  if (f.ig4)      p.set('ig4',           f.ig4);
-  if (f.ig5)      p.set('ig5',           f.ig5);
-  if (f.cd)       p.set('commerce_dept', f.cd);
+  for (const [key, apiKey] of Object.entries(FILTER_PARAM_KEYS)) {
+    (f[key] || []).forEach(v => p.append(apiKey, v));
+  }
   return p;
 }
 
@@ -453,15 +511,22 @@ async function loadFilterOptions() {
     const r = await fetch(`http://localhost:8000/api/filter-options?${fp}`);
     if (!r.ok) return;
     const d = await r.json();
-    SS.province.setOptions(d.provinces      || []);
-    SS.city    .setOptions(d.cities         || []);
-    SS.district.setOptions(d.districts      || []);
-    SS.ig1     .setOptions(d.ig1            || []);
-    SS.ig2     .setOptions(d.ig2            || []);
-    SS.ig3     .setOptions(d.ig3            || []);
-    SS.ig4     .setOptions(d.ig4            || []);
-    SS.ig5     .setOptions(d.ig5            || []);
-    SS.cd      .setOptions(d.commerce_depts || []);
+    SS.province.setOptions((d.provinces      || []).map(v => ({ v, label: v })));
+    SS.city    .setOptions((d.cities         || []).map(v => ({ v, label: v })));
+    SS.district.setOptions((d.districts      || []).map(v => ({ v, label: v })));
+    SS.ig1     .setOptions((d.ig1            || []).map(v => ({ v, label: v })));
+    SS.ig2     .setOptions((d.ig2            || []).map(v => ({ v, label: v })));
+    SS.ig3     .setOptions((d.ig3            || []).map(v => ({ v, label: v })));
+    SS.ig4     .setOptions((d.ig4            || []).map(v => ({ v, label: v })));
+    SS.ig5     .setOptions((d.ig5            || []).map(v => ({ v, label: v })));
+    SS.cd      .setOptions((d.commerce_depts || []).map(v => ({ v, label: v })));
+    if (d.default_year_from) window._defYrFrom = d.default_year_from;
+    if (d.default_year_to)   window._defYrTo   = d.default_year_to;
+    SS.year._placeholder = `${window._defYrFrom || DEFAULT_YR_FROM}–${window._defYrTo || DEFAULT_YR_TO}`;
+    SS.year.placeholder = SS.year._placeholder;
+    SS.year    .setOptions((d.years          || []).map(v => ({ v: String(v), label: String(v) })));
+    SS.month   .setOptions((d.months         || []).map(v => ({ v: String(v), label: fmtMonth(v) })));
+    SS.day     .setOptions((d.days           || []).map(v => ({ v: String(v), label: String(v) })));
   } catch(e) {
     console.warn('filter-options:', e.message);
   } finally {
@@ -587,11 +652,12 @@ function updateBreadcrumb() {
 
 function updateTitles() {
   const note = hasActiveFilters() ? ' ★' : '';
+  const dt   = ' · ' + dateFilterLabel();
   let t = 'سرویس لول وندور — استان‌های ایران';
   if (currentLevel==='city')     t = `شهرهای ${selectedPath.province}`;
   if (currentLevel==='district') t = `مناطق ${selectedPath.city} — ${selectedPath.province}`;
   if (currentLevel==='store')    t = `فروشگاه‌های ${selectedPath.district} — ${selectedPath.city}`;
-  document.getElementById('page-title').textContent = t + note;
+  document.getElementById('page-title').textContent = t + dt + note;
   document.getElementById('sb-title').textContent   = SB_LABELS[currentLevel];
 }
 

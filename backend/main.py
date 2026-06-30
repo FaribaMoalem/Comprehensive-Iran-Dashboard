@@ -4,30 +4,35 @@ Iran Province Service Level Dashboard — Backend API
 اجرا: python -m uvicorn main:app --host 0.0.0.0 --port 8000
 """
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
-from typing import Optional
+from typing import Optional, List
 import pyodbc
 import logging
+import threading
 import time
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-# ─── Startup: pre-warm caches ──────────────────────────────────────────────────
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    logger.info("pre-warming caches...")
+# ─── Startup: pre-warm caches (background — server starts immediately) ─────────
+def _warm_caches():
     try:
+        logger.info("pre-warming caches (background)...")
         _refresh_loc_combos()
         _refresh_item_combos()
-        # warm province SL (most-used, slowest)
+        _refresh_date_combos()
         service_level()
         logger.info("cache warm-up done")
     except Exception as e:
         logger.warning(f"warm-up failed (non-fatal): {e}")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    threading.Thread(target=_warm_caches, daemon=True).start()
     yield
 
 
@@ -57,10 +62,13 @@ CACHE_TTL_COMBOS   = 30 * 60   # combo tables rarely change
 # In-memory combo tables (loaded once, refreshed every 30 min)
 # loc: [(province, city, district), ...]
 # itm: [(l1, l2, l3, l4, l5, cd), ...]
+# dt:  [(year, month, day), ...]
 _loc_combos: list = []
 _loc_combos_ts: float = 0.0
 _itm_combos: list = []
 _itm_combos_ts: float = 0.0
+_date_combos: list = []
+_date_combos_ts: float = 0.0
 
 
 def get_connection():
@@ -132,33 +140,83 @@ _AGG = """
     COUNT(DISTINCT f.COM_DIM_VendorRef)             AS vendor_count,
     COUNT(f.ID)                                     AS total_orders"""
 
+# Delivery date FK on fact table → COM.DIM_Date
+_DATE_JOIN = "JOIN [COM].[DIM_Date] AS dt WITH (NOLOCK) ON dt.ID = f.COM_DIM_Date_DeliveryDateRef"
+
+# Default Persian year range (applied when no specific year is selected)
+DEFAULT_YEAR_FROM = 1399
+DEFAULT_YEAR_TO   = 1405
+
 
 # ─── Dynamic filter builder ────────────────────────────────────────────────────
+def _tolist(v) -> list:
+    if v is None:
+        return []
+    if isinstance(v, list):
+        return [x for x in v if x is not None and x != ""]
+    return [v]
+
+
+def _add_in(conditions: list, params: list, col: str, vals, cast=None):
+    vals = _tolist(vals)
+    if not vals:
+        return
+    if cast is not None:
+        vals = [cast(v) for v in vals]
+    if len(vals) == 1:
+        conditions.append(f"{col} = ?")
+        params.append(vals[0])
+    else:
+        conditions.append(f"{col} IN ({','.join('?' * len(vals))})")
+        params.extend(vals)
+
+
 def build_filters(
     province=None, city=None, district=None, store_id=None,
     ig1=None, ig2=None, ig3=None, ig4=None, ig5=None,
     commerce_dept=None,
+    year=None, month=None, day=None,
 ):
     conditions: list[str] = []
     params:     list      = []
-    need_item = any([ig1, ig2, ig3, ig4, ig5, commerce_dept])
+    need_item = any(_tolist(x) for x in [ig1, ig2, ig3, ig4, ig5, commerce_dept])
 
-    if province: conditions.append("loc.StateChart = ?");                                  params.append(province)
-    if city:     conditions.append("loc.CityChart = ?");                                   params.append(city)
-    if district: conditions.append("ISNULL(NULLIF(loc.District, ''), N'نامشخص') = ?");    params.append(district)
-    if store_id: conditions.append("loc.BKInventLocationId = ?");                          params.append(store_id)
+    _add_in(conditions, params, "loc.StateChart", province)
+    _add_in(conditions, params, "loc.CityChart", city)
+    _add_in(conditions, params, "ISNULL(NULLIF(loc.District, ''), N'نامشخص')", district)
+    _add_in(conditions, params, "loc.BKInventLocationId", store_id)
 
-    for col, val in [("Level1",ig1),("Level2",ig2),("Level3",ig3),("Level4",ig4),("Level5",ig5)]:
-        if val: conditions.append(f"itm.{col} = ?"); params.append(val)
-    if commerce_dept:
-        conditions.append("itm.CommerceDepartment = ?"); params.append(commerce_dept)
+    for col, val in [("Level1", ig1), ("Level2", ig2), ("Level3", ig3), ("Level4", ig4), ("Level5", ig5)]:
+        _add_in(conditions, params, f"itm.{col}", val)
+    _add_in(conditions, params, "itm.CommerceDepartment", commerce_dept)
 
-    extra_joins = ""
+    years = _tolist(year)
+    if years:
+        _add_in(conditions, params, "dt.PersianYearInt", years, cast=int)
+    else:
+        conditions.append("dt.PersianYearInt BETWEEN ? AND ?")
+        params.extend([DEFAULT_YEAR_FROM, DEFAULT_YEAR_TO])
+
+    _add_in(conditions, params, "dt.PersianMonthNo", month, cast=int)
+    _add_in(conditions, params, "dt.PersianDayInMonth", day, cast=int)
+
+    extra_joins = f"\n{_DATE_JOIN}"
     if need_item:
-        extra_joins = "\nLEFT JOIN [COM].[DIM_Item] AS itm WITH (NOLOCK) ON itm.ID = f.COM_DIM_ItemRef"
+        extra_joins += "\nLEFT JOIN [COM].[DIM_Item] AS itm WITH (NOLOCK) ON itm.ID = f.COM_DIM_ItemRef"
 
     extra_where = ("AND " + " AND ".join(conditions)) if conditions else ""
     return extra_joins, extra_where, tuple(params)
+
+
+def filter_kw(**kwargs) -> dict:
+    out: dict = {}
+    for k, v in kwargs.items():
+        vals = _tolist(v)
+        if vals:
+            out[k] = ",".join(str(x) for x in sorted(vals, key=str))
+    if not _tolist(kwargs.get("year")):
+        out["yr_range"] = f"{DEFAULT_YEAR_FROM}-{DEFAULT_YEAR_TO}"
+    return out
 
 
 def filter_key(base: str, kw: dict) -> str:
@@ -205,6 +263,30 @@ WHERE Level1 IS NOT NULL AND Level1 <> ''"""
         logger.info(f"itm_combos loaded: {len(_itm_combos)} rows")
 
 
+def _refresh_date_combos():
+    """One DB query → all (year, month, day) combos with fact data. Cached 30 min."""
+    global _date_combos, _date_combos_ts
+    sql = f"""
+SELECT DISTINCT
+    dt.PersianYearInt,
+    dt.PersianMonthNo,
+    dt.PersianDayInMonth
+FROM (
+    SELECT DISTINCT COM_DIM_Date_DeliveryDateRef AS date_ref
+    FROM [SCM].[Fact_VendorServiceLevel] WITH (NOLOCK)
+    WHERE COM_DIM_Date_DeliveryDateRef IS NOT NULL
+) AS fd
+JOIN [COM].[DIM_Date] AS dt WITH (NOLOCK) ON dt.ID = fd.date_ref
+WHERE dt.PersianYearInt BETWEEN {DEFAULT_YEAR_FROM} AND {DEFAULT_YEAR_TO}"""
+    rows = run_rows(sql)
+    if rows:
+        _date_combos    = [(int(r[0]), int(r[1]), int(r[2])) for r in rows]
+        _date_combos_ts = time.monotonic()
+        logger.info(f"date_combos loaded: {len(_date_combos)} rows")
+    else:
+        logger.warning("date_combos: no rows returned — check COM_DIM_Date_DeliveryDateRef join")
+
+
 def _get_loc_combos() -> list:
     if time.monotonic() - _loc_combos_ts > CACHE_TTL_COMBOS:
         _refresh_loc_combos()
@@ -217,46 +299,57 @@ def _get_itm_combos() -> list:
     return _itm_combos
 
 
+def _get_date_combos() -> list:
+    if time.monotonic() - _date_combos_ts > CACHE_TTL_COMBOS:
+        _refresh_date_combos()
+    return _date_combos
+
+
 # ─── Filter options — Python-side cascade (no extra DB queries) ────────────────
 @app.get("/api/filter-options")
 def filter_options(
-    province:      Optional[str] = None,
-    city:          Optional[str] = None,
-    district:      Optional[str] = None,
-    ig1:           Optional[str] = None,
-    ig2:           Optional[str] = None,
-    ig3:           Optional[str] = None,
-    ig4:           Optional[str] = None,
-    ig5:           Optional[str] = None,
-    commerce_dept: Optional[str] = None,
+    province:      Optional[List[str]] = Query(None),
+    city:          Optional[List[str]] = Query(None),
+    district:      Optional[List[str]] = Query(None),
+    ig1:           Optional[List[str]] = Query(None),
+    ig2:           Optional[List[str]] = Query(None),
+    ig3:           Optional[List[str]] = Query(None),
+    ig4:           Optional[List[str]] = Query(None),
+    ig5:           Optional[List[str]] = Query(None),
+    commerce_dept: Optional[List[str]] = Query(None),
+    year:          Optional[List[int]] = Query(None),
+    month:         Optional[List[int]] = Query(None),
+    day:           Optional[List[int]] = Query(None),
 ):
-    locs = _get_loc_combos()   # (province, city, district)
-    itms = _get_itm_combos()   # (l1, l2, l3, l4, l5, cd)
+    locs  = _get_loc_combos()
+    itms  = _get_itm_combos()
+    dates = [r for r in _get_date_combos() if DEFAULT_YEAR_FROM <= r[0] <= DEFAULT_YEAR_TO]
 
-    # ── Location cascade (each level filtered by parent selections only) ──
-    def _lf(idx, filters: dict) -> list:
-        rows = locs
+    def _cascade(rows, idx, filters: dict) -> list:
         for pidx, pval in filters.items():
-            if pval: rows = [r for r in rows if r[pidx] == pval]
-        return sorted({r[idx] for r in rows if r[idx]})
+            vals = _tolist(pval)
+            if vals:
+                if isinstance(vals[0], str):
+                    allowed = set(vals)
+                else:
+                    allowed = {int(v) for v in vals}
+                rows = [r for r in rows if r[pidx] in allowed]
+        return sorted({r[idx] for r in rows if r[idx] is not None and r[idx] != ""})
 
-    provinces = _lf(0, {})
-    cities    = _lf(1, {0: province})
-    districts = _lf(2, {0: province, 1: city})
+    provinces = _cascade(locs, 0, {})
+    cities    = _cascade(locs, 1, {0: province})
+    districts = _cascade(locs, 2, {0: province, 1: city})
 
-    # ── Item cascade (each level filtered by parent selections only) ──────
-    def _if(idx, filters: dict) -> list:
-        rows = itms
-        for pidx, pval in filters.items():
-            if pval: rows = [r for r in rows if r[pidx] == pval]
-        return sorted({r[idx] for r in rows if r[idx]})
+    ig1_opts = _cascade(itms, 0, {})
+    ig2_opts = _cascade(itms, 1, {0: ig1})
+    ig3_opts = _cascade(itms, 2, {0: ig1, 1: ig2})
+    ig4_opts = _cascade(itms, 3, {0: ig1, 1: ig2, 2: ig3})
+    ig5_opts = _cascade(itms, 4, {0: ig1, 1: ig2, 2: ig3, 3: ig4})
+    cd_opts  = _cascade(itms, 5, {0: ig1, 1: ig2, 2: ig3, 3: ig4, 4: ig5})
 
-    ig1_opts = _if(0, {})
-    ig2_opts = _if(1, {0: ig1})
-    ig3_opts = _if(2, {0: ig1, 1: ig2})
-    ig4_opts = _if(3, {0: ig1, 1: ig2, 2: ig3})
-    ig5_opts = _if(4, {0: ig1, 1: ig2, 2: ig3, 3: ig4})
-    cd_opts  = _if(5, {0: ig1, 1: ig2, 2: ig3, 3: ig4, 4: ig5})
+    years  = sorted(_cascade(dates, 0, {}), reverse=True)
+    months = _cascade(dates, 1, {0: year})
+    days   = _cascade(dates, 2, {0: year, 1: month})
 
     return {
         "provinces":      provinces,
@@ -268,24 +361,35 @@ def filter_options(
         "ig4":            ig4_opts,
         "ig5":            ig5_opts,
         "commerce_depts": cd_opts,
+        "years":          years,
+        "months":         months,
+        "days":           days,
+        "default_year_from": DEFAULT_YEAR_FROM,
+        "default_year_to":   DEFAULT_YEAR_TO,
     }
 
 
 # ─── Province ──────────────────────────────────────────────────────────────────
 @app.get("/api/service-level")
 def service_level(
-    province:      Optional[str] = None,
-    city:          Optional[str] = None,
-    district:      Optional[str] = None,
-    store_id:      Optional[str] = None,
-    ig1:           Optional[str] = None,
-    ig2:           Optional[str] = None,
-    ig3:           Optional[str] = None,
-    ig4:           Optional[str] = None,
-    ig5:           Optional[str] = None,
-    commerce_dept: Optional[str] = None,
+    province:      Optional[List[str]] = Query(None),
+    city:          Optional[List[str]] = Query(None),
+    district:      Optional[List[str]] = Query(None),
+    store_id:      Optional[List[str]] = Query(None),
+    ig1:           Optional[List[str]] = Query(None),
+    ig2:           Optional[List[str]] = Query(None),
+    ig3:           Optional[List[str]] = Query(None),
+    ig4:           Optional[List[str]] = Query(None),
+    ig5:           Optional[List[str]] = Query(None),
+    commerce_dept: Optional[List[str]] = Query(None),
+    year:          Optional[List[int]] = Query(None),
+    month:         Optional[List[int]] = Query(None),
+    day:           Optional[List[int]] = Query(None),
 ):
-    ej, ew, fp = build_filters(province, city, district, store_id, ig1, ig2, ig3, ig4, ig5, commerce_dept)
+    ej, ew, fp = build_filters(
+        province, city, district, store_id, ig1, ig2, ig3, ig4, ig5, commerce_dept,
+        year, month, day,
+    )
     sql = f"""
 SELECT
     loc.StateChart                                  AS name_fa,{_AGG},
@@ -298,8 +402,11 @@ WHERE loc.StateChart IS NOT NULL AND loc.StateChart <> ''
 {ew}
 GROUP BY loc.StateChart
 ORDER BY sl_percent DESC;"""
-    kw   = dict(province=province,city=city,district=district,store_id=store_id,
-                ig1=ig1,ig2=ig2,ig3=ig3,ig4=ig4,ig5=ig5,cd=commerce_dept)
+    kw = filter_kw(
+        province=province, city=city, district=district, store_id=store_id,
+        ig1=ig1, ig2=ig2, ig3=ig3, ig4=ig4, ig5=ig5, cd=commerce_dept,
+        year=year, month=month, day=day,
+    )
     data = cached_query(filter_key("provinces", kw), sql, fp, CACHE_TTL_PROVINCE)
     return {"status": "ok", "level": "province", "data": data}
 
@@ -308,17 +415,23 @@ ORDER BY sl_percent DESC;"""
 @app.get("/api/service-level/cities")
 def service_level_cities(
     province:      str,
-    city:          Optional[str] = None,
-    district:      Optional[str] = None,
-    store_id:      Optional[str] = None,
-    ig1:           Optional[str] = None,
-    ig2:           Optional[str] = None,
-    ig3:           Optional[str] = None,
-    ig4:           Optional[str] = None,
-    ig5:           Optional[str] = None,
-    commerce_dept: Optional[str] = None,
+    city:          Optional[List[str]] = Query(None),
+    district:      Optional[List[str]] = Query(None),
+    store_id:      Optional[List[str]] = Query(None),
+    ig1:           Optional[List[str]] = Query(None),
+    ig2:           Optional[List[str]] = Query(None),
+    ig3:           Optional[List[str]] = Query(None),
+    ig4:           Optional[List[str]] = Query(None),
+    ig5:           Optional[List[str]] = Query(None),
+    commerce_dept: Optional[List[str]] = Query(None),
+    year:          Optional[List[int]] = Query(None),
+    month:         Optional[List[int]] = Query(None),
+    day:           Optional[List[int]] = Query(None),
 ):
-    ej, ew, fp = build_filters(None, city, district, store_id, ig1, ig2, ig3, ig4, ig5, commerce_dept)
+    ej, ew, fp = build_filters(
+        None, city, district, store_id, ig1, ig2, ig3, ig4, ig5, commerce_dept,
+        year, month, day,
+    )
     sql = f"""
 SELECT
     loc.CityChart                                   AS name_fa,{_AGG},
@@ -332,8 +445,11 @@ WHERE loc.StateChart = ?
 {ew}
 GROUP BY loc.CityChart
 ORDER BY sl_percent DESC;"""
-    kw   = dict(province=province,city=city,district=district,store_id=store_id,
-                ig1=ig1,ig2=ig2,ig3=ig3,ig4=ig4,ig5=ig5,cd=commerce_dept)
+    kw = filter_kw(
+        province=province, city=city, district=district, store_id=store_id,
+        ig1=ig1, ig2=ig2, ig3=ig3, ig4=ig4, ig5=ig5, cd=commerce_dept,
+        year=year, month=month, day=day,
+    )
     data = cached_query(filter_key(f"cities:{province}", kw), sql, (province,)+fp, CACHE_TTL_DETAIL)
     return {"status": "ok", "level": "city", "data": data}
 
@@ -343,16 +459,22 @@ ORDER BY sl_percent DESC;"""
 def service_level_districts(
     province:      str,
     city:          str,
-    district:      Optional[str] = None,
-    store_id:      Optional[str] = None,
-    ig1:           Optional[str] = None,
-    ig2:           Optional[str] = None,
-    ig3:           Optional[str] = None,
-    ig4:           Optional[str] = None,
-    ig5:           Optional[str] = None,
-    commerce_dept: Optional[str] = None,
+    district:      Optional[List[str]] = Query(None),
+    store_id:      Optional[List[str]] = Query(None),
+    ig1:           Optional[List[str]] = Query(None),
+    ig2:           Optional[List[str]] = Query(None),
+    ig3:           Optional[List[str]] = Query(None),
+    ig4:           Optional[List[str]] = Query(None),
+    ig5:           Optional[List[str]] = Query(None),
+    commerce_dept: Optional[List[str]] = Query(None),
+    year:          Optional[List[int]] = Query(None),
+    month:         Optional[List[int]] = Query(None),
+    day:           Optional[List[int]] = Query(None),
 ):
-    ej, ew, fp = build_filters(None, None, district, store_id, ig1, ig2, ig3, ig4, ig5, commerce_dept)
+    ej, ew, fp = build_filters(
+        None, None, district, store_id, ig1, ig2, ig3, ig4, ig5, commerce_dept,
+        year, month, day,
+    )
     sql = f"""
 SELECT
     ISNULL(NULLIF(loc.District, ''), N'نامشخص')    AS name_fa,{_AGG},
@@ -365,8 +487,11 @@ WHERE loc.StateChart = ? AND loc.CityChart = ?
 {ew}
 GROUP BY ISNULL(NULLIF(loc.District, ''), N'نامشخص')
 ORDER BY sl_percent DESC;"""
-    kw   = dict(province=province,city=city,district=district,store_id=store_id,
-                ig1=ig1,ig2=ig2,ig3=ig3,ig4=ig4,ig5=ig5,cd=commerce_dept)
+    kw = filter_kw(
+        province=province, city=city, district=district, store_id=store_id,
+        ig1=ig1, ig2=ig2, ig3=ig3, ig4=ig4, ig5=ig5, cd=commerce_dept,
+        year=year, month=month, day=day,
+    )
     data = cached_query(filter_key(f"districts:{province}:{city}", kw), sql, (province,city)+fp, CACHE_TTL_DETAIL)
     return {"status": "ok", "level": "district", "data": data}
 
@@ -377,15 +502,21 @@ def service_level_stores(
     province:      str,
     city:          str,
     district:      str,
-    store_id:      Optional[str] = None,
-    ig1:           Optional[str] = None,
-    ig2:           Optional[str] = None,
-    ig3:           Optional[str] = None,
-    ig4:           Optional[str] = None,
-    ig5:           Optional[str] = None,
-    commerce_dept: Optional[str] = None,
+    store_id:      Optional[List[str]] = Query(None),
+    ig1:           Optional[List[str]] = Query(None),
+    ig2:           Optional[List[str]] = Query(None),
+    ig3:           Optional[List[str]] = Query(None),
+    ig4:           Optional[List[str]] = Query(None),
+    ig5:           Optional[List[str]] = Query(None),
+    commerce_dept: Optional[List[str]] = Query(None),
+    year:          Optional[List[int]] = Query(None),
+    month:         Optional[List[int]] = Query(None),
+    day:           Optional[List[int]] = Query(None),
 ):
-    ej, ew, fp = build_filters(None, None, None, store_id, ig1, ig2, ig3, ig4, ig5, commerce_dept)
+    ej, ew, fp = build_filters(
+        None, None, None, store_id, ig1, ig2, ig3, ig4, ig5, commerce_dept,
+        year, month, day,
+    )
     sql = f"""
 SELECT
     loc.BKInventLocationId                          AS store_id,
@@ -401,8 +532,11 @@ WHERE loc.StateChart = ?
 {ew}
 GROUP BY loc.BKInventLocationId, loc.Name
 ORDER BY sl_percent DESC;"""
-    kw   = dict(province=province,city=city,district=district,store_id=store_id,
-                ig1=ig1,ig2=ig2,ig3=ig3,ig4=ig4,ig5=ig5,cd=commerce_dept)
+    kw = filter_kw(
+        province=province, city=city, district=district, store_id=store_id,
+        ig1=ig1, ig2=ig2, ig3=ig3, ig4=ig4, ig5=ig5, cd=commerce_dept,
+        year=year, month=month, day=day,
+    )
     data = cached_query(filter_key(f"stores:{province}:{city}:{district}", kw), sql, (province,city,district)+fp, CACHE_TTL_DETAIL)
     return {"status": "ok", "level": "store", "data": data}
 
@@ -410,10 +544,11 @@ ORDER BY sl_percent DESC;"""
 # ─── Cache management ──────────────────────────────────────────────────────────
 @app.delete("/api/cache")
 def clear_cache():
-    global _loc_combos, _itm_combos, _loc_combos_ts, _itm_combos_ts
+    global _loc_combos, _itm_combos, _date_combos_ts, _loc_combos_ts, _itm_combos_ts
     _cache.clear()
     _loc_combos_ts = 0.0
     _itm_combos_ts = 0.0
+    _date_combos_ts = 0.0
     return {"status": "ok", "message": "cache cleared"}
 
 
@@ -423,5 +558,6 @@ def health():
         "status": "ok",
         "loc_combos": len(_loc_combos),
         "itm_combos": len(_itm_combos),
+        "date_combos": len(_date_combos),
         "cached_keys": len(_cache),
     }
