@@ -1,40 +1,61 @@
 <!DOCTYPE html>
-<html lang="fa" dir="rtl">
+<html lang="fa" dir="rtl" data-theme="dark">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>داشبورد سرویس لول وندور</title>
+  <title>داشبورد SL + فروش — ایران</title>
   <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
   <style>
-    :root {
+    :root, [data-theme="dark"] {
       --bg:#060b18; --surface:#0d1b2e; --card:rgba(13,27,46,.88);
       --b1:rgba(255,255,255,.07); --b2:rgba(255,255,255,.14);
       --t1:#f1f5f9; --t2:#94a3b8; --t3:#475569;
+      --header-bg:linear-gradient(135deg,#06101f,#0d1b2e);
+      --filter-bg:rgba(6,11,24,.92); --sidebar-bg:rgba(6,11,24,.85);
+      --sb-sticky:rgba(6,11,24,.95); --popup-bg:#0d1b2e;
+      --search-bg:rgba(6,11,24,.8); --overlay-bg:rgba(6,11,24,.85);
+      --tip-bg:rgba(6,11,24,.96); --ss-btn-bg:rgba(13,27,46,.98);
+      --day-sel-bg:rgba(13,27,46,.98); --map-lbl:#fff; --map-lbl-shadow:rgba(0,0,0,1);
+      --tile-url:https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png;
+    }
+    [data-theme="light"] {
+      --bg:#eef2f7; --surface:#ffffff; --card:rgba(255,255,255,.95);
+      --b1:rgba(0,0,0,.06); --b2:rgba(0,0,0,.12);
+      --t1:#0f172a; --t2:#475569; --t3:#94a3b8;
+      --header-bg:linear-gradient(135deg,#e2e8f0,#f8fafc);
+      --filter-bg:rgba(255,255,255,.95); --sidebar-bg:rgba(248,250,252,.95);
+      --sb-sticky:rgba(248,250,252,.98); --popup-bg:#ffffff;
+      --search-bg:#f1f5f9; --overlay-bg:rgba(241,245,249,.9);
+      --tip-bg:rgba(255,255,255,.98); --ss-btn-bg:#ffffff;
+      --day-sel-bg:#ffffff; --map-lbl:#0f172a; --map-lbl-shadow:rgba(255,255,255,.9);
+      --tile-url:https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png;
     }
     *{box-sizing:border-box;margin:0;padding:0}
     body{font-family:'Vazirmatn',Tahoma,sans-serif;background:var(--bg);color:var(--t1);height:100vh;display:flex;flex-direction:column;overflow:hidden}
 
     /* ── Header ── */
-    #header{background:linear-gradient(135deg,#06101f,#0d1b2e);border-bottom:1px solid var(--b2);padding:9px 18px;display:flex;justify-content:space-between;align-items:center;flex-shrink:0;box-shadow:0 2px 20px rgba(0,0,0,.6)}
+    #header{background:var(--header-bg);border-bottom:1px solid var(--b2);padding:9px 18px;display:flex;justify-content:space-between;align-items:center;flex-shrink:0;box-shadow:0 2px 20px rgba(0,0,0,.15)}
     .h-left{display:flex;align-items:center;gap:10px}
     .dot{width:8px;height:8px;border-radius:50%;background:#22c55e;box-shadow:0 0 8px #22c55e;animation:pulse 2.2s infinite}
     @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
     #page-title{font-size:14px;font-weight:600}
     .h-right{display:flex;align-items:center;gap:10px}
     #last-update{font-size:11px;color:var(--t3)}
-    #refresh-btn{background:rgba(255,255,255,.06);color:var(--t2);border:1px solid var(--b2);border-radius:7px;padding:4px 12px;font-size:11px;font-family:'Vazirmatn',Tahoma,sans-serif;cursor:pointer;transition:.2s}
-    #refresh-btn:hover{background:rgba(255,255,255,.12)}
+    #refresh-btn,#theme-btn{background:rgba(255,255,255,.06);color:var(--t2);border:1px solid var(--b2);border-radius:7px;padding:4px 12px;font-size:11px;font-family:'Vazirmatn',Tahoma,sans-serif;cursor:pointer;transition:.2s}
+    [data-theme="light"] #refresh-btn,[data-theme="light"] #theme-btn{background:rgba(0,0,0,.04)}
+    #refresh-btn:hover,#theme-btn:hover{background:rgba(255,255,255,.12)}
+    [data-theme="light"] #refresh-btn:hover,[data-theme="light"] #theme-btn:hover{background:rgba(0,0,0,.08)}
 
     /* ── Breadcrumb ── */
-    #breadcrumb{background:rgba(13,27,46,.7);padding:4px 18px;border-bottom:1px solid var(--b1);flex-shrink:0;display:flex;align-items:center;gap:5px}
+    #breadcrumb{background:var(--card);padding:4px 18px;border-bottom:1px solid var(--b1);flex-shrink:0;display:flex;align-items:center;gap:5px}
     .bc{color:var(--t3);cursor:pointer;font-size:12px;transition:color .15s}
     .bc:hover{color:var(--t2)}
     .bc.cur{color:#22c55e;cursor:default;font-weight:600}
     .bc-sep{color:var(--t3);font-size:11px}
 
     /* ── Filter bar ── */
-    #filter-bar{background:rgba(6,11,24,.92);border-bottom:1px solid var(--b2);padding:5px 14px;flex-shrink:0;display:flex;align-items:center;gap:5px;overflow-x:auto;min-height:38px;position:relative;z-index:300}
+    #filter-bar{background:var(--filter-bg);border-bottom:1px solid var(--b2);padding:5px 14px;flex-shrink:0;display:flex;align-items:center;gap:5px;overflow-x:auto;min-height:38px;position:relative;z-index:300}
     #filter-bar::-webkit-scrollbar{height:3px}
     #filter-bar::-webkit-scrollbar-thumb{background:var(--b2)}
     .fb-label{font-size:10px;color:var(--t3);font-weight:700;white-space:nowrap;letter-spacing:.5px;text-transform:uppercase;flex-shrink:0}
@@ -43,16 +64,20 @@
     #filter-badge{background:rgba(34,197,94,.15);border:1px solid rgba(34,197,94,.3);border-radius:5px;padding:1px 8px;font-size:10px;color:#22c55e;font-weight:600;white-space:nowrap;flex-shrink:0;display:none}
     #filter-reset{background:rgba(239,68,68,.12);color:#f87171;border:1px solid rgba(239,68,68,.25);border-radius:7px;padding:2px 9px;font-size:11px;font-family:'Vazirmatn',Tahoma,sans-serif;cursor:pointer;white-space:nowrap;flex-shrink:0;height:26px;display:none;transition:.2s}
     #filter-reset:hover{background:rgba(239,68,68,.22)}
+    .sl-filter-btn{background:var(--ss-btn-bg);color:var(--t3);border:1px solid var(--b2);border-radius:7px;padding:0 10px;font-size:11px;font-family:'Vazirmatn',Tahoma,sans-serif;cursor:pointer;height:26px;white-space:nowrap;flex-shrink:0;transition:.2s}
+    .sl-filter-btn:hover{border-color:var(--b2);color:var(--t2)}
+    .sl-filter-btn.active-high{border-color:rgba(21,128,61,.6);background:rgba(21,128,61,.15);color:#22c55e;font-weight:600}
+    .sl-filter-btn.active-low{border-color:rgba(220,38,38,.6);background:rgba(220,38,38,.12);color:#ef4444;font-weight:600}
 
     /* ── Custom searchable select ── */
     .ss{position:relative;flex-shrink:0}
-    .ss-btn{background:rgba(13,27,46,.98);color:var(--t3);border:1px solid var(--b2);border-radius:7px;padding:0 26px 0 8px;font-size:11px;font-family:'Vazirmatn',Tahoma,sans-serif;cursor:pointer;height:26px;min-width:108px;max-width:155px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:26px;position:relative;transition:border-color .15s,color .15s;text-align:right}
+    .ss-btn{background:var(--ss-btn-bg);color:var(--t3);border:1px solid var(--b2);border-radius:7px;padding:0 26px 0 8px;font-size:11px;font-family:'Vazirmatn',Tahoma,sans-serif;cursor:pointer;height:26px;min-width:108px;max-width:155px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:26px;position:relative;transition:border-color .15s,color .15s;text-align:right}
     .ss-btn::after{content:'▾';position:absolute;left:7px;top:50%;transform:translateY(-50%);font-size:9px;color:var(--t3);transition:transform .2s}
     .ss-btn.active{border-color:rgba(34,197,94,.5);color:var(--t1)}
     .ss-btn.open::after{transform:translateY(-50%) rotate(180deg)}
     /* Fixed-position popup — appended to body, not inside filter-bar */
-    .ss-popup{position:fixed;background:#0d1b2e;border:1px solid var(--b2);border-radius:9px;box-shadow:0 12px 32px rgba(0,0,0,.7);z-index:99999;overflow:hidden;min-width:160px}
-    .ss-search{width:100%;padding:7px 10px;background:rgba(6,11,24,.8);color:var(--t1);border:none;border-bottom:1px solid var(--b1);font-size:11px;font-family:'Vazirmatn',Tahoma,sans-serif;outline:none;direction:rtl}
+    .ss-popup{position:fixed;background:var(--popup-bg);border:1px solid var(--b2);border-radius:9px;box-shadow:0 12px 32px rgba(0,0,0,.2);z-index:99999;overflow:hidden;min-width:160px}
+    .ss-search{width:100%;padding:7px 10px;background:var(--search-bg);color:var(--t1);border:none;border-bottom:1px solid var(--b1);font-size:11px;font-family:'Vazirmatn',Tahoma,sans-serif;outline:none;direction:rtl}
     .ss-search::placeholder{color:var(--t3)}
     .ss-list{max-height:220px;overflow-y:auto}
     .ss-list::-webkit-scrollbar{width:3px}
@@ -69,7 +94,7 @@
     .ss-spin{width:10px;height:10px;border:1.5px solid rgba(34,197,94,.3);border-top-color:#22c55e;border-radius:50%;animation:rot .7s linear infinite;flex-shrink:0}
 
     /* ── KPI ── */
-    #kpi-bar{display:grid;grid-template-columns:repeat(4,1fr);gap:7px;padding:7px 14px;background:var(--surface);border-bottom:1px solid var(--b1);flex-shrink:0}
+    #kpi-bar{display:grid;grid-template-columns:repeat(6,1fr);gap:7px;padding:7px 14px;background:var(--surface);border-bottom:1px solid var(--b1);flex-shrink:0}
     .kpi{background:var(--card);border:1px solid var(--b1);border-radius:10px;padding:7px 12px;text-align:center}
     .kv{font-size:17px;font-weight:700;color:#22c55e}
     .kl{font-size:10px;color:var(--t3);margin-top:2px}
@@ -78,10 +103,10 @@
     #main{display:flex;flex:1;overflow:hidden}
 
     /* ── Sidebar ── */
-    #sidebar{width:210px;background:rgba(6,11,24,.85);border-right:1px solid var(--b1);overflow-y:auto;flex-shrink:0}
+    #sidebar{width:280px;background:var(--sidebar-bg);border-right:1px solid var(--b1);overflow-y:auto;flex-shrink:0}
     #sidebar::-webkit-scrollbar{width:3px}
     #sidebar::-webkit-scrollbar-thumb{background:var(--b2);border-radius:2px}
-    #sb-title{padding:7px 12px;font-size:10px;font-weight:700;color:var(--t3);border-bottom:1px solid var(--b1);position:sticky;top:0;background:rgba(6,11,24,.95);text-transform:uppercase;letter-spacing:1px}
+    #sb-title{padding:7px 12px;font-size:10px;font-weight:700;color:var(--t3);border-bottom:1px solid var(--b1);position:sticky;top:0;background:var(--sb-sticky);text-transform:uppercase;letter-spacing:1px}
     .pi{display:flex;align-items:center;padding:5px 10px;border-bottom:1px solid rgba(255,255,255,.04);transition:background .12s;gap:5px}
     .pi:hover,.pi.active{background:rgba(255,255,255,.06)}
     .pi.click{cursor:pointer}
@@ -90,37 +115,48 @@
     .bb{width:30px;height:3px;background:rgba(255,255,255,.06);border-radius:2px;overflow:hidden;flex-shrink:0}
     .bf{height:100%;border-radius:2px}
     .pi-sl{font-size:11px;font-weight:700;min-width:30px;text-align:left;flex-shrink:0}
+    .pi-sales{font-size:10px;font-weight:600;min-width:38px;text-align:left;flex-shrink:0}
+    .sb-head{display:flex;align-items:center;padding:5px 10px;border-bottom:1px solid var(--b1);position:sticky;top:28px;background:var(--sb-sticky);gap:4px;z-index:1}
+    .sb-sort{font-size:9px;color:var(--t3);cursor:pointer;padding:2px 6px;border-radius:4px;transition:.15s;white-space:nowrap}
+    .sb-sort:hover{color:var(--t2);background:rgba(255,255,255,.06)}
+    .sb-sort.active{color:#22c55e;font-weight:700}
+    .period-tag{font-size:9px;color:#60a5fa;background:rgba(96,165,250,.12);border:1px solid rgba(96,165,250,.25);border-radius:4px;padding:1px 6px;white-space:nowrap;flex-shrink:0}
+    .period-tag.cmp{color:#fbbf24;background:rgba(251,191,36,.1);border-color:rgba(251,191,36,.25)}
+    .diag-icon{font-size:11px;margin-left:2px}
 
     /* ── Map ── */
     #map-wrap{flex:1;position:relative;overflow:hidden}
     #lmap{width:100%;height:100%}
 
     /* ── Tooltip ── */
-    #tip{display:none;position:absolute;background:rgba(6,11,24,.96);border:1px solid var(--b2);border-radius:11px;padding:11px 15px;pointer-events:none;z-index:9999;min-width:195px;font-size:12px;box-shadow:0 8px 28px rgba(0,0,0,.6)}
+    #tip{display:none;position:absolute;background:var(--tip-bg);border:1px solid var(--b2);border-radius:11px;padding:11px 15px;pointer-events:none;z-index:9999;min-width:195px;font-size:12px;box-shadow:0 8px 28px rgba(0,0,0,.15)}
     .tt{font-size:13px;font-weight:700;color:var(--t1);margin-bottom:8px;padding-bottom:6px;border-bottom:1px solid var(--b1)}
     .tr{display:flex;justify-content:space-between;margin-bottom:4px;color:var(--t3)}
     .tr span:last-child{font-weight:600;color:var(--t2)}
     .th{color:var(--t3);font-size:10px;margin-top:6px;text-align:center;border-top:1px solid var(--b1);padding-top:5px}
 
     /* ── Legend ── */
-    #legend{position:absolute;bottom:28px;left:12px;background:rgba(6,11,24,.9);border:1px solid var(--b1);border-radius:10px;padding:9px 13px;z-index:1000}
+    #legend{position:absolute;bottom:28px;left:12px;background:var(--card);border:1px solid var(--b1);border-radius:10px;padding:9px 13px;z-index:1000}
     #legend h4{font-size:10px;color:var(--t3);margin-bottom:6px;font-weight:600;text-transform:uppercase;letter-spacing:.7px}
     .li{display:flex;align-items:center;gap:7px;margin-bottom:3px;font-size:11px;color:var(--t2)}
     .ld{width:10px;height:10px;border-radius:3px;flex-shrink:0}
+    .day-between{background:var(--day-sel-bg);color:var(--t2);border:1px solid var(--b2);border-radius:7px;padding:0 6px;font-size:11px;font-family:'Vazirmatn',Tahoma,sans-serif;height:26px;min-width:52px;cursor:pointer;flex-shrink:0}
+    .day-between:focus{border-color:rgba(34,197,94,.5);outline:none;color:var(--t1)}
+    .day-between-lbl{font-size:9px;color:var(--t3);white-space:nowrap;flex-shrink:0}
 
     /* ── Overlay ── */
-    #overlay{position:absolute;inset:0;background:rgba(6,11,24,.85);display:flex;align-items:center;justify-content:center;z-index:5000;flex-direction:column;gap:12px}
+    #overlay{position:absolute;inset:0;background:var(--overlay-bg);display:flex;align-items:center;justify-content:center;z-index:5000;flex-direction:column;gap:12px}
     #overlay .msg{color:var(--t2);font-size:13px}
     .spin{width:32px;height:32px;border:2px solid rgba(34,197,94,.2);border-top-color:#22c55e;border-radius:50%;animation:rot .8s linear infinite}
     @keyframes rot{to{transform:rotate(360deg)}}
 
     /* ── Leaflet overrides ── */
-    .leaflet-control-zoom a{background:rgba(13,27,46,.95)!important;color:var(--t2)!important;border-color:var(--b2)!important;font-family:'Vazirmatn',Tahoma,sans-serif!important}
-    .leaflet-control-zoom a:hover{background:rgba(13,27,46,1)!important;color:var(--t1)!important}
-    .leaflet-control-attribution{background:rgba(6,11,24,.6)!important;color:var(--t3)!important;font-size:9px!important}
-    .leaflet-control-attribution a{color:#475569!important}
-    .prov-lbl{background:none;border:none;color:rgba(255,255,255,.95);font-family:'Vazirmatn',Tahoma,sans-serif;font-weight:700;font-size:10px;text-shadow:0 1px 4px rgba(0,0,0,1),0 0 8px rgba(0,0,0,.8);text-align:center;pointer-events:none}
-    .leaflet-tooltip.sl-lbl{background:none!important;border:none!important;box-shadow:none!important;color:rgba(255,255,255,.95)!important;font-family:'Vazirmatn',Tahoma,sans-serif!important;font-weight:700!important;font-size:9px!important;padding:0!important;text-shadow:0 1px 3px rgba(0,0,0,.9)!important}
+    .leaflet-control-zoom a{background:var(--ss-btn-bg)!important;color:var(--t2)!important;border-color:var(--b2)!important;font-family:'Vazirmatn',Tahoma,sans-serif!important}
+    .leaflet-control-zoom a:hover{background:var(--surface)!important;color:var(--t1)!important}
+    .leaflet-control-attribution{background:var(--card)!important;color:var(--t3)!important;font-size:9px!important}
+    .leaflet-control-attribution a{color:var(--t3)!important}
+    .prov-lbl{background:none;border:none;color:var(--map-lbl);font-family:'Vazirmatn',Tahoma,sans-serif;font-weight:700;font-size:10px;text-shadow:0 1px 4px var(--map-lbl-shadow),0 0 8px var(--map-lbl-shadow);text-align:center;pointer-events:none}
+    .leaflet-tooltip.sl-lbl{background:none!important;border:none!important;box-shadow:none!important;color:var(--map-lbl)!important;font-family:'Vazirmatn',Tahoma,sans-serif!important;font-weight:700!important;font-size:9px!important;padding:0!important;text-shadow:0 1px 3px var(--map-lbl-shadow)!important}
     .leaflet-tooltip.sl-lbl::before{display:none!important}
     .store-dot{border-radius:50%;border:2px solid rgba(255,255,255,.25);box-shadow:0 2px 6px rgba(0,0,0,.5)}
   </style>
@@ -128,9 +164,10 @@
 <body>
 
 <div id="header">
-  <div class="h-left"><div class="dot"></div><h1 id="page-title">سرویس لول وندور — استان‌های ایران</h1></div>
+  <div class="h-left"><div class="dot"></div><h1 id="page-title">SL + فروش — استان‌های ایران</h1></div>
   <div class="h-right">
     <span id="last-update">در حال بارگذاری...</span>
+    <button id="theme-btn" onclick="toggleTheme()" title="تغییر تم">☀</button>
     <button id="refresh-btn" onclick="loadData()">↻ بروزرسانی</button>
   </div>
 </div>
@@ -140,10 +177,22 @@
 <div id="filter-bar">
   <span class="fb-label">فیلتر</span>
 
-  <span class="fb-group">تاریخ:</span>
-  <div class="ss" id="ss-year"></div>
-  <div class="ss" id="ss-month"></div>
-  <div class="ss" id="ss-day"></div>
+  <span class="period-tag">بازه جاری</span>
+  <div class="ss" id="ss-a-year"></div>
+  <div class="ss" id="ss-a-month"></div>
+  <span class="day-between-lbl">روز</span>
+  <select id="a-day-from" class="day-between" title="از روز"><option value="">از</option></select>
+  <span class="day-between-lbl">–</span>
+  <select id="a-day-to" class="day-between" title="تا روز"><option value="">تا</option></select>
+
+  <div class="fb-sep"></div>
+  <span class="period-tag cmp">بازه مقایسه</span>
+  <div class="ss" id="ss-b-year"></div>
+  <div class="ss" id="ss-b-month"></div>
+  <span class="day-between-lbl">روز</span>
+  <select id="b-day-from" class="day-between" title="از روز"><option value="">از</option></select>
+  <span class="day-between-lbl">–</span>
+  <select id="b-day-to" class="day-between" title="تا روز"><option value="">تا</option></select>
 
   <div class="fb-sep"></div>
   <span class="fb-group">موقعیت:</span>
@@ -162,15 +211,22 @@
   <div class="fb-sep"></div>
   <div class="ss" id="ss-cd"></div>
 
+  <div class="fb-sep"></div>
+  <span class="fb-group">فروشگاه:</span>
+  <button type="button" id="sl-filter-high" class="sl-filter-btn" onclick="toggleSlFilter('high')">SL ≥ ۸۰٪</button>
+  <button type="button" id="sl-filter-low" class="sl-filter-btn" onclick="toggleSlFilter('low')">SL &lt; ۳۰٪</button>
+
   <div id="filter-badge">فیلتر فعال</div>
   <button id="filter-reset" onclick="resetFilters()">✕ پاک کردن</button>
 </div>
 
 <div id="kpi-bar">
-  <div class="kpi"><div class="kv" id="k-avg">—</div><div class="kl">میانگین سرویس لول</div></div>
-  <div class="kpi"><div class="kv" id="k-best" style="color:#22c55e">—</div><div class="kl">بهترین</div></div>
-  <div class="kpi"><div class="kv" id="k-worst" style="color:#ef4444">—</div><div class="kl">ضعیف‌ترین</div></div>
-  <div class="kpi"><div class="kv" id="k-target">—</div><div class="kl">SL ≥ ۸۰٪</div></div>
+  <div class="kpi"><div class="kv" id="k-avg">—</div><div class="kl">میانگین SL (بازه جاری)</div></div>
+  <div class="kpi"><div class="kv" id="k-sales" style="color:#60a5fa">—</div><div class="kl">کل فروش (بازه جاری)</div></div>
+  <div class="kpi"><div class="kv" id="k-warn" style="color:#ef4444">—</div><div class="kl">هشدار ↓فروش+↓SL</div></div>
+  <div class="kpi"><div class="kv" id="k-sales-chg" style="color:#fbbf24">—</div><div class="kl">تغییر فروش (میانگین)</div></div>
+  <div class="kpi"><div class="kv" id="k-sl-high" style="color:#15803d">—</div><div class="kl">فروشگاه SL ≥ ۸۰٪</div></div>
+  <div class="kpi"><div class="kv" id="k-sl-low" style="color:#dc2626">—</div><div class="kl">فروشگاه SL &lt; ۳۰٪</div></div>
 </div>
 
 <div id="main">
@@ -182,12 +238,16 @@
     <div id="lmap"></div>
     <div id="tip"></div>
     <div id="legend">
-      <h4>سرویس لول</h4>
-      <div class="li"><div class="ld" style="background:#16a34a"></div>≥ ۸۵٪ عالی</div>
-      <div class="li"><div class="ld" style="background:#65a30d"></div>۷۵–۸۵٪ خوب</div>
-      <div class="li"><div class="ld" style="background:#ca8a04"></div>۶۵–۷۵٪ متوسط</div>
-      <div class="li"><div class="ld" style="background:#ea580c"></div>۵۵–۶۵٪ ضعیف</div>
-      <div class="li"><div class="ld" style="background:#dc2626"></div>&lt; ۵۵٪ بحرانی</div>
+      <h4>راهنما</h4>
+      <div class="li"><div class="ld" style="background:#14532d"></div>SL ≥ ۹۰٪</div>
+      <div class="li"><div class="ld" style="background:#15803d"></div>۸۰–۹۰٪</div>
+      <div class="li"><div class="ld" style="background:#22c55e"></div>۶۰–۸۰٪</div>
+      <div class="li"><div class="ld" style="background:#86efac"></div>۵۰–۶۰٪</div>
+      <div class="li"><div class="ld" style="background:#ca8a04"></div>۴۰–۵۰٪</div>
+      <div class="li"><div class="ld" style="background:#ea580c"></div>۳۰–۴۰٪</div>
+      <div class="li"><div class="ld" style="background:#dc2626"></div>&lt; ۳۰٪</div>
+      <div class="li" style="margin-top:5px"><span style="color:var(--t3);font-size:10px">● بزرگ‌تر = فروش بیشتر</span></div>
+      <div class="li"><span style="color:#ef4444;font-size:10px">⚠ ↓فروش + ↓SL</span></div>
     </div>
     <div id="overlay"><div class="spin"></div><div class="msg">در حال اتصال...</div></div>
   </div>
@@ -216,6 +276,11 @@ class SearchSelect {
   }
 
   getValue() { return [...this._values]; }
+
+  selectSingle(v) {
+    this._values = new Set([String(v)]);
+    this._updateBtn();
+  }
 
   setLoading(on) {
     this._isLoading = on;
@@ -378,29 +443,67 @@ class SearchSelect {
 /* ═══════════════════════════════════════════════════════════
    App state & config
    ═══════════════════════════════════════════════════════════ */
-const API_BASE   = 'http://localhost:8000/api/service-level';
+const API_BASE   = 'http://localhost:8000/api/combined';
 const REFRESH_MS = 5 * 60 * 1000;
 const DEFAULT_YR_FROM = 1399;
 const DEFAULT_YR_TO   = 1405;
 
 let currentData  = [];
+let rawData      = [];
+let storeSlCounts = { above_80: 0, below_30: 0 };
+let slFilter     = null;
 let currentLevel = 'province';
 let selectedPath = { province: null, city: null, district: null };
+let sidebarSort  = 'sl';
 
 const SB_LABELS = {
-  province:'رتبه‌بندی استان‌ها', city:'رتبه‌بندی شهرها',
-  district:'رتبه‌بندی مناطق',   store:'رتبه‌بندی فروشگاه‌ها'
+  province:'استان‌ها', city:'شهرها',
+  district:'مناطق',   store:'فروشگاه‌ها'
 };
 
 const TIP = document.getElementById('tip');
 const MW  = document.getElementById('map-wrap');
 
 function clr(sl) {
-  if (sl >= 85) return '#16a34a';
-  if (sl >= 75) return '#65a30d';
-  if (sl >= 65) return '#ca8a04';
-  if (sl >= 55) return '#ea580c';
+  if (sl >= 90) return '#14532d';
+  if (sl >= 80) return '#15803d';
+  if (sl >= 70) return '#16a34a';
+  if (sl >= 60) return '#22c55e';
+  if (sl >= 50) return '#86efac';
+  if (sl >= 40) return '#ca8a04';
+  if (sl >= 30) return '#ea580c';
   return '#dc2626';
+}
+
+function diagBorder(d) {
+  if (d === 'warning')    return { color:'#ef4444', weight:3 };
+  if (d === 'investigate') return { color:'#f59e0b', weight:3 };
+  if (d === 'risk')       return { color:'#a855f7', weight:2 };
+  return { color:'rgba(255,255,255,.15)', weight:1.5 };
+}
+
+function fmtMoney(v) {
+  if (v == null || isNaN(v)) return '—';
+  return Math.round(v).toLocaleString('fa-IR');
+}
+
+function fmtChg(pct) {
+  if (pct == null || isNaN(pct)) return '—';
+  const arrow = pct > 0 ? '↑' : pct < 0 ? '↓' : '→';
+  const col   = pct > 0 ? '#22c55e' : pct < 0 ? '#ef4444' : 'var(--t3)';
+  return `<span style="color:${col}">${arrow} ${Math.abs(pct).toFixed(1)}٪</span>`;
+}
+
+function fmtSlChg(pts) {
+  if (pts == null || isNaN(pts)) return '—';
+  const arrow = pts > 0 ? '↑' : pts < 0 ? '↓' : '→';
+  const col   = pts > 0 ? '#22c55e' : pts < 0 ? '#ef4444' : 'var(--t3)';
+  return `<span style="color:${col}">${arrow} ${Math.abs(pts).toFixed(1)}</span>`;
+}
+
+function salesRadius(net, maxNet) {
+  if (!net || !maxNet) return 8;
+  return Math.max(8, Math.min(32, 8 + Math.sqrt(net / maxNet) * 24));
 }
 
 const FA_MONTHS = ['','فروردین','اردیبهشت','خرداد','تیر','مرداد','شهریور','مهر','آبان','آذر','دی','بهمن','اسفند'];
@@ -408,12 +511,38 @@ function fmtMonth(m) { return m + ' — ' + (FA_MONTHS[+m] || ''); }
 
 /* ── Searchable selects ─────────────────────────────────────── */
 const SS = {};
+const DAY_SEL = {};
+
+function initDayBetween() {
+  ['a-day-from','a-day-to','b-day-from','b-day-to'].forEach(id => {
+    const el = document.getElementById(id);
+    DAY_SEL[id] = el;
+    el.addEventListener('change', onFilterChange);
+  });
+}
+
+function setDayOptions(fromId, toId, days) {
+  const opts = ['<option value="">—</option>']
+    .concat((days || []).map(d => `<option value="${d}">${d}</option>`)).join('');
+  const f = document.getElementById(fromId), t = document.getElementById(toId);
+  const fv = f.value, tv = t.value;
+  f.innerHTML = opts; t.innerHTML = opts;
+  if (fv && [...f.options].some(o => o.value === fv)) f.value = fv;
+  if (tv && [...t.options].some(o => o.value === tv)) t.value = tv;
+}
+
+function getDayRange(prefix) {
+  const from = document.getElementById(prefix + '-day-from').value;
+  const to   = document.getElementById(prefix + '-day-to').value;
+  return { from: from || null, to: to || null };
+}
 
 function initSelects() {
   const defs = [
-    { key:'year',     wrap:'ss-year',     ph:`${DEFAULT_YR_FROM}–${DEFAULT_YR_TO}` },
-    { key:'month',    wrap:'ss-month',    ph:'همه ماه‌ها'  },
-    { key:'day',      wrap:'ss-day',      ph:'همه روزها'   },
+    { key:'a_year',  wrap:'ss-a-year',  ph:`${DEFAULT_YR_FROM}–${DEFAULT_YR_TO}` },
+    { key:'a_month', wrap:'ss-a-month', ph:'ماه جاری'  },
+    { key:'b_year',  wrap:'ss-b-year',  ph:'سال مقایسه' },
+    { key:'b_month', wrap:'ss-b-month', ph:'ماه مقایسه' },
     { key:'province', wrap:'ss-province', ph:'همه استان‌ها' },
     { key:'city',     wrap:'ss-city',     ph:'همه شهرها'  },
     { key:'district', wrap:'ss-district', ph:'همه مناطق'  },
@@ -430,42 +559,57 @@ function initSelects() {
 }
 
 function getFilters() {
+  const aDay = getDayRange('a'), bDay = getDayRange('b');
   return {
-    year:     SS.year.getValue(),
-    month:    SS.month.getValue(),
-    day:      SS.day.getValue(),
+    a_year:  SS.a_year.getValue(),
+    a_month: SS.a_month.getValue(),
+    a_day_from: aDay.from, a_day_to: aDay.to,
+    b_year:  SS.b_year.getValue(),
+    b_month: SS.b_month.getValue(),
+    b_day_from: bDay.from, b_day_to: bDay.to,
     province: SS.province.getValue(),
     city:     SS.city.getValue(),
     district: SS.district.getValue(),
-    ig1:      SS.ig1.getValue(),
-    ig2:      SS.ig2.getValue(),
-    ig3:      SS.ig3.getValue(),
-    ig4:      SS.ig4.getValue(),
-    ig5:      SS.ig5.getValue(),
-    cd:       SS.cd.getValue(),
+    ig1: SS.ig1.getValue(), ig2: SS.ig2.getValue(), ig3: SS.ig3.getValue(),
+    ig4: SS.ig4.getValue(), ig5: SS.ig5.getValue(),
+    cd:  SS.cd.getValue(),
   };
 }
 
 function hasActiveFilters() {
   const f = getFilters();
+  if (slFilter) return true;
   return Object.entries(f).some(([k, v]) => {
-    if (k === 'year' && (!v || !v.length)) return false;
+    if (k === 'a_year' && (!v || !v.length)) return false;
+    if (v && typeof v === 'string') return v !== '';
     return v && v.length > 0;
   });
 }
 
-function dateFilterLabel() {
+function dayRangeLabel(from, to) {
+  if (from && to) return from === to ? from : from + '–' + to;
+  if (from) return 'از ' + from;
+  if (to)   return 'تا ' + to;
+  return '';
+}
+
+function periodLabel(prefix) {
   const f = getFilters();
-  const y = f.year || [], m = f.month || [], d = f.day || [];
-  if (d.length && m.length && y.length) return y.join('،') + '/' + m.join('،') + '/' + d.join('،');
-  if (m.length && y.length)             return y.join('،') + '/' + m.join('،');
-  if (y.length === 1)                   return y[0];
-  if (y.length > 1)                     return y.length + ' سال';
-  return `${DEFAULT_YR_FROM}–${DEFAULT_YR_TO}`;
+  const y = f[prefix + '_year'] || [], m = f[prefix + '_month'] || [];
+  const dr = dayRangeLabel(f[prefix + '_day_from'], f[prefix + '_day_to']);
+  let s = '';
+  if (y.length && m.length) s = y.join('،') + '/' + m.join('،');
+  else if (y.length === 1) s = y[0];
+  else if (y.length > 1) s = y.length + ' سال';
+  else if (prefix === 'a') s = `${DEFAULT_YR_FROM}–${DEFAULT_YR_TO}`;
+  else return 'انتخاب نشده';
+  if (dr) s += '/' + dr;
+  return s;
 }
 
 const FILTER_PARAM_KEYS = {
-  year: 'year', month: 'month', day: 'day',
+  a_year: 'a_year', a_month: 'a_month',
+  b_year: 'b_year', b_month: 'b_month',
   province: 'province', city: 'city', district: 'district',
   ig1: 'ig1', ig2: 'ig2', ig3: 'ig3', ig4: 'ig4', ig5: 'ig5',
   cd: 'commerce_dept',
@@ -477,10 +621,28 @@ function filtersToParams() {
   for (const [key, apiKey] of Object.entries(FILTER_PARAM_KEYS)) {
     (f[key] || []).forEach(v => p.append(apiKey, v));
   }
+  if (f.a_day_from) p.set('a_day_from', f.a_day_from);
+  if (f.a_day_to)   p.set('a_day_to', f.a_day_to);
+  if (f.b_day_from) p.set('b_day_from', f.b_day_from);
+  if (f.b_day_to)   p.set('b_day_to', f.b_day_to);
+  return p;
+}
+
+function filtersToOptionsParams() {
+  const f = getFilters();
+  const p = new URLSearchParams();
+  (f.a_year  || []).forEach(v => p.append('year', v));
+  (f.a_month || []).forEach(v => p.append('month', v));
+  ['province','city','district','ig1','ig2','ig3','ig4','ig5'].forEach(k => {
+    (f[k] || []).forEach(v => p.append(k, v));
+  });
+  (f.cd || []).forEach(v => p.append('commerce_dept', v));
   return p;
 }
 
 let _filterTimer = null;
+let _defaultYearSet = false;
+let _loading = false;
 async function onFilterChange() {
   updateFilterBadge();
   clearTimeout(_filterTimer);
@@ -492,9 +654,38 @@ async function onFilterChange() {
 
 function resetFilters() {
   Object.values(SS).forEach(s => s.reset());
+  ['a-day-from','a-day-to','b-day-from','b-day-to'].forEach(id => {
+    document.getElementById(id).value = '';
+  });
+  slFilter = null;
+  updateSlFilterBtns();
   updateFilterBadge();
   loadFilterOptions();
   loadData();
+}
+
+function updateSlFilterBtns() {
+  const hi = storeSlCounts.above_80 ?? 0;
+  const lo = storeSlCounts.below_30 ?? 0;
+  document.getElementById('sl-filter-high').textContent = `SL ≥ ۸۰٪ (${hi.toLocaleString('fa-IR')})`;
+  document.getElementById('sl-filter-low').textContent  = `SL < ۳۰٪ (${lo.toLocaleString('fa-IR')})`;
+  document.getElementById('sl-filter-high').classList.toggle('active-high', slFilter === 'high');
+  document.getElementById('sl-filter-low').classList.toggle('active-low', slFilter === 'low');
+}
+
+function toggleSlFilter(mode) {
+  slFilter = slFilter === mode ? null : mode;
+  updateSlFilterBtns();
+  updateFilterBadge();
+  if (rawData.length) renderAll(rawData);
+  else loadData();
+}
+
+function applySlFilter(data) {
+  if (currentLevel !== 'store' || !slFilter) return data;
+  if (slFilter === 'high') return data.filter(p => (p.sl_percent || 0) >= 80);
+  if (slFilter === 'low')  return data.filter(p => (p.sl_percent || 0) < 30);
+  return data;
 }
 
 function updateFilterBadge() {
@@ -504,8 +695,7 @@ function updateFilterBadge() {
 }
 
 async function loadFilterOptions() {
-  const fp = filtersToParams();
-  // show loading on all dropdowns
+  const fp = filtersToOptionsParams();
   Object.values(SS).forEach(s => s.setLoading(true));
   try {
     const r = await fetch(`http://localhost:8000/api/filter-options?${fp}`);
@@ -522,11 +712,21 @@ async function loadFilterOptions() {
     SS.cd      .setOptions((d.commerce_depts || []).map(v => ({ v, label: v })));
     if (d.default_year_from) window._defYrFrom = d.default_year_from;
     if (d.default_year_to)   window._defYrTo   = d.default_year_to;
-    SS.year._placeholder = `${window._defYrFrom || DEFAULT_YR_FROM}–${window._defYrTo || DEFAULT_YR_TO}`;
-    SS.year.placeholder = SS.year._placeholder;
-    SS.year    .setOptions((d.years          || []).map(v => ({ v: String(v), label: String(v) })));
-    SS.month   .setOptions((d.months         || []).map(v => ({ v: String(v), label: fmtMonth(v) })));
-    SS.day     .setOptions((d.days           || []).map(v => ({ v: String(v), label: String(v) })));
+    const yrPh = `${window._defYrFrom || DEFAULT_YR_FROM}–${window._defYrTo || DEFAULT_YR_TO}`;
+    SS.a_year._placeholder = yrPh; SS.a_year.placeholder = yrPh;
+    const yrOpts = (d.years || []).map(v => ({ v: String(v), label: String(v) }));
+    const moOpts = (d.months || []).map(v => ({ v: String(v), label: fmtMonth(v) }));
+    const dyOpts = (d.days   || []).map(v => ({ v: String(v), label: String(v) }));
+    SS.a_year.setOptions(yrOpts);  SS.b_year.setOptions(yrOpts);
+    SS.a_month.setOptions(moOpts); SS.b_month.setOptions(moOpts);
+    setDayOptions('a-day-from', 'a-day-to', d.days || []);
+    setDayOptions('b-day-from', 'b-day-to', d.days || []);
+    if (!_defaultYearSet && !SS.a_year.getValue().length && yrOpts.length) {
+      const latest = yrOpts.map(o => o.v).sort((a, b) => +b - +a)[0];
+      SS.a_year.selectSingle(latest);
+      if (moOpts.length) SS.a_month.selectSingle(moOpts[moOpts.length - 1].v);
+      _defaultYearSet = true;
+    }
   } catch(e) {
     console.warn('filter-options:', e.message);
   } finally {
@@ -576,9 +776,27 @@ const PROVINCES = {type:"FeatureCollection",features:[
    ═══════════════════════════════════════════════════════════ */
 const map = L.map('lmap', { center:[33,53], zoom:5, zoomControl:false, preferCanvas:true });
 L.control.zoom({ position:'bottomright' }).addTo(map);
-L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+const TILE_DARK = 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
+const TILE_LIGHT = 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png';
+let tileLayer = L.tileLayer(TILE_DARK, {
   attribution:'© OpenStreetMap © CARTO', maxZoom:19, subdomains:'abcd'
 }).addTo(map);
+
+function applyTheme(theme) {
+  const t = theme === 'light' ? 'light' : 'dark';
+  document.documentElement.setAttribute('data-theme', t);
+  localStorage.setItem('dashboard-theme', t);
+  const btn = document.getElementById('theme-btn');
+  if (btn) btn.textContent = t === 'light' ? '🌙' : '☀';
+  const url = t === 'light' ? TILE_LIGHT : TILE_DARK;
+  if (tileLayer) map.removeLayer(tileLayer);
+  tileLayer = L.tileLayer(url, { attribution:'© OpenStreetMap © CARTO', maxZoom:19, subdomains:'abcd' }).addTo(map);
+}
+function toggleTheme() {
+  const cur = document.documentElement.getAttribute('data-theme') || 'dark';
+  applyTheme(cur === 'dark' ? 'light' : 'dark');
+}
+applyTheme(localStorage.getItem('dashboard-theme') || 'dark');
 
 let geoLayer = null, bubbleLayer = null;
 
@@ -617,25 +835,48 @@ function drillUp(to) {
 
 /* ── Data ──────────────────────────────────────────────────── */
 async function loadData() {
-  showOverlay('در حال دریافت داده...');
+  if (_loading) return;
+  _loading = true;
+  showOverlay('در حال دریافت داده... (ممکن است چند دقیقه طول بکشد)');
   try {
     const r = await fetch(buildUrl());
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    currentData = (await r.json()).data;
+    const json = await r.json();
+    rawData = json.data || [];
+    storeSlCounts = json.store_sl_counts || { above_80: 0, below_30: 0 };
+    currentData = applySlFilter(rawData);
     renderAll(currentData);
     document.getElementById('last-update').textContent =
       'بروزرسانی: ' + new Date().toLocaleTimeString('fa-IR');
     hideOverlay();
   } catch(e) {
     showOverlay(`خطا: ${e.message}`, true);
+  } finally {
+    _loading = false;
   }
 }
 
 /* ── Render ─────────────────────────────────────────────────── */
 function renderAll(data) {
-  const sorted = [...data].sort((a,b) => b.sl_percent-a.sl_percent);
+  const sorted = sortSidebarData(data);
   updateBreadcrumb(); updateTitles();
-  renderKPIs(sorted); renderSidebar(sorted); renderMap(data);
+  renderKPIs(data); renderSidebar(sorted); renderMap(data);
+  updateSlFilterBtns();
+}
+
+function sortSidebarData(data) {
+  const arr = [...data];
+  if (sidebarSort === 'sales') {
+    arr.sort((a, b) => (b.sales_change_pct ?? -999) - (a.sales_change_pct ?? -999));
+  } else {
+    arr.sort((a, b) => b.sl_percent - a.sl_percent);
+  }
+  return arr;
+}
+
+function setSidebarSort(mode) {
+  sidebarSort = mode;
+  renderSidebar(sortSidebarData(currentData));
 }
 
 function updateBreadcrumb() {
@@ -652,8 +893,8 @@ function updateBreadcrumb() {
 
 function updateTitles() {
   const note = hasActiveFilters() ? ' ★' : '';
-  const dt   = ' · ' + dateFilterLabel();
-  let t = 'سرویس لول وندور — استان‌های ایران';
+  const dt   = ' · جاری: ' + periodLabel('a') + ' | مقایسه: ' + periodLabel('b');
+  let t = 'SL + فروش — استان‌های ایران';
   if (currentLevel==='city')     t = `شهرهای ${selectedPath.province}`;
   if (currentLevel==='district') t = `مناطق ${selectedPath.city} — ${selectedPath.province}`;
   if (currentLevel==='store')    t = `فروشگاه‌های ${selectedPath.district} — ${selectedPath.city}`;
@@ -661,27 +902,45 @@ function updateTitles() {
   document.getElementById('sb-title').textContent   = SB_LABELS[currentLevel];
 }
 
-function renderKPIs(sorted) {
-  if (!sorted.length) return;
-  const avg = Math.round(sorted.reduce((s,p)=>s+p.sl_percent,0)/sorted.length);
+function renderKPIs(data) {
+  document.getElementById('k-sl-high').textContent = (storeSlCounts.above_80 ?? 0).toLocaleString('fa-IR');
+  document.getElementById('k-sl-low').textContent  = (storeSlCounts.below_30 ?? 0).toLocaleString('fa-IR');
+  if (!data.length) {
+    document.getElementById('k-avg').textContent = '—';
+    document.getElementById('k-sales').textContent = '—';
+    document.getElementById('k-warn').textContent = '—';
+    document.getElementById('k-sales-chg').innerHTML = '—';
+    return;
+  }
+  const avg = Math.round(data.reduce((s,p)=>s+p.sl_percent,0)/data.length);
+  const totalSales = data.reduce((s,p)=>s+(p.net_amount||0),0);
+  const warnings = data.filter(p=>p.diagnosis==='warning').length;
+  const chgs = data.filter(p=>p.sales_change_pct!=null).map(p=>p.sales_change_pct);
+  const avgChg = chgs.length ? Math.round(chgs.reduce((a,b)=>a+b,0)/chgs.length*10)/10 : null;
   document.getElementById('k-avg').textContent    = avg+'٪';
-  document.getElementById('k-best').textContent   = sorted[0].name_fa+'  '+Math.round(sorted[0].sl_percent)+'٪';
-  document.getElementById('k-worst').textContent  = sorted.at(-1).name_fa+'  '+Math.round(sorted.at(-1).sl_percent)+'٪';
-  document.getElementById('k-target').textContent = sorted.filter(p=>p.sl_percent>=80).length+' / '+sorted.length;
+  document.getElementById('k-sales').textContent  = fmtMoney(totalSales);
+  document.getElementById('k-warn').textContent   = warnings;
+  document.getElementById('k-sales-chg').innerHTML = avgChg!=null ? fmtChg(avgChg) : '—';
 }
 
 function renderSidebar(sorted) {
   const el  = document.getElementById('rank-list');
   const can = currentLevel!=='store';
-  el.innerHTML='';
+  el.innerHTML = `<div class="sb-head">
+    <span style="flex:1;font-size:9px;color:var(--t3)">نام</span>
+    <span class="sb-sort${sidebarSort==='sl'?' active':''}" onclick="setSidebarSort('sl')">SL</span>
+    <span class="sb-sort${sidebarSort==='sales'?' active':''}" onclick="setSidebarSort('sales')">فروش</span>
+  </div>`;
   sorted.forEach((p,i)=>{
     const sl=Math.round(p.sl_percent),c=clr(sl);
+    const icon = p.diagnosis==='warning' ? '⚠' : p.diagnosis==='investigate' ? '🔍' : '';
     const d=document.createElement('div');
     d.className='pi'+(can?' click':''); d.id='pi-'+i;
     d.innerHTML=`<span class="pi-rank">${i+1}</span>
-      <span class="pi-name" title="${p.name_fa}">${p.name_fa}</span>
-      <div class="bb"><div class="bf" style="width:${sl}%;background:${c}"></div></div>
-      <span class="pi-sl" style="color:${c}">${sl}٪</span>`;
+      <span class="pi-name" title="${p.name_fa}">${icon} ${p.name_fa}</span>
+      <div class="bb"><div class="bf" style="width:${Math.min(sl,100)}%;background:${c}"></div></div>
+      <span class="pi-sl" style="color:${c}">${sl}٪</span>
+      <span class="pi-sales">${fmtChg(p.sales_change_pct)}</span>`;
     if(can) d.onclick=()=>drillDown(p);
     el.appendChild(d);
   });
@@ -697,19 +956,22 @@ function renderMap(data) {
 function renderProvince(data) {
   const pMap={};
   data.forEach(d=>pMap[d.name_fa]=d);
-  const sorted=[...data].sort((a,b)=>b.sl_percent-a.sl_percent);
+  const sorted=sortSidebarData(data);
+  const maxSales=Math.max(...data.map(d=>d.net_amount||0),1);
+  const markers=[];
 
   geoLayer=L.geoJSON(PROVINCES,{
     style:feat=>{
       const p=pMap[feat.properties.name],sl=p?Math.round(p.sl_percent):null;
-      return{fillColor:sl!==null?clr(sl):'#1a2a3a',fillOpacity:sl!==null?.72:.2,color:'rgba(6,11,24,.75)',weight:1.5};
+      const db=p?diagBorder(p.diagnosis):{color:'rgba(6,11,24,.75)',weight:1.5};
+      return{fillColor:sl!==null?clr(sl):'#1a2a3a',fillOpacity:sl!==null?.72:.2,color:db.color,weight:db.weight};
     },
     onEachFeature:(feat,layer)=>{
       const p=pMap[feat.properties.name];
       if(!p) return;
       const rank=sorted.findIndex(s=>s.name_fa===p.name_fa);
       layer.on({
-        mouseover:e=>{layer.setStyle({fillOpacity:.92,weight:2,color:'rgba(255,255,255,.2)'});hilite(rank);showTip(e.originalEvent,p);},
+        mouseover:e=>{layer.setStyle({fillOpacity:.92,weight:3});hilite(rank);showTip(e.originalEvent,p);},
         mousemove:e=>moveTip(e.originalEvent),
         mouseout:()=>{geoLayer.resetStyle(layer);hideTip();},
         click:()=>{hideTip();drillDown(p);}
@@ -717,36 +979,53 @@ function renderProvince(data) {
       const coords=feat.geometry.coordinates[0];
       let cx=0,cy=0;
       coords.forEach(([lng,lat])=>{cx+=lng;cy+=lat;});
-      const m=L.marker([cy/coords.length,cx/coords.length],{
+      const lat=cy/coords.length,lng=cx/coords.length;
+      const r=salesRadius(p.net_amount,maxSales);
+      if(r>0 && p.net_amount>0){
+        const bm=L.circleMarker([lat,lng],{
+          radius:r,fillColor:'rgba(96,165,250,.55)',fillOpacity:.7,
+          color:p.diagnosis==='warning'?'#ef4444':'rgba(96,165,250,.8)',weight:p.diagnosis==='warning'?3:1.5
+        });
+        bm.on('mouseover',e=>{hilite(rank);showTip(e.originalEvent,p);});
+        bm.on('mousemove',e=>moveTip(e.originalEvent));
+        bm.on('mouseout',()=>hideTip());
+        bm.on('click',()=>{hideTip();drillDown(p);});
+        markers.push(bm);
+      }
+      const m=L.marker([lat,lng],{
         icon:L.divIcon({html:`<div class="prov-lbl">${Math.round(p.sl_percent)}٪</div>`,className:'',iconSize:[36,16],iconAnchor:[18,8]}),
         interactive:false,zIndexOffset:200
       });
-      m._slLabel=true;
-      m.addTo(map);
+      m._slLabel=true; m.addTo(map);
     }
   }).addTo(map);
+  if(markers.length) bubbleLayer=L.featureGroup(markers).addTo(map);
   try{map.fitBounds(geoLayer.getBounds(),{padding:[16,16]});}catch(e){}
 }
 
 function renderBubbles(data) {
-  const sorted=[...data].sort((a,b)=>b.sl_percent-a.sl_percent);
+  const sorted=sortSidebarData(data);
   const canDrill=currentLevel!=='store', isStore=currentLevel==='store';
+  const maxSales=Math.max(...data.map(d=>d.net_amount||0),1);
   const markers=[];
 
   data.forEach(p=>{
     if(!p.lat||!p.lng||isNaN(p.lat)||isNaN(p.lng)) return;
     const sl=Math.round(p.sl_percent),c=clr(sl);
     const rank=sorted.findIndex(s=>s.name_fa===p.name_fa);
+    const db=diagBorder(p.diagnosis);
     let marker;
 
     if(isStore){
       marker=L.marker([p.lat,p.lng],{
-        icon:L.divIcon({html:`<div class="store-dot" style="width:13px;height:13px;background:${c}"></div>`,className:'',iconSize:[13,13],iconAnchor:[6,6]}),
+        icon:L.divIcon({html:`<div class="store-dot" style="width:14px;height:14px;background:${c};border:2px solid ${db.color}"></div>`,className:'',iconSize:[14,14],iconAnchor:[7,7]}),
         zIndexOffset:100
       });
     } else {
-      const r=Math.max(8,5+(sl-40)*.14);
-      marker=L.circleMarker([p.lat,p.lng],{radius:r,fillColor:c,fillOpacity:.85,color:'rgba(255,255,255,.2)',weight:1.5});
+      const r=salesRadius(p.net_amount,maxSales);
+      marker=L.circleMarker([p.lat,p.lng],{
+        radius:r,fillColor:c,fillOpacity:.82,color:db.color,weight:db.weight
+      });
       marker.bindTooltip(sl+'٪',{permanent:true,direction:'center',className:'sl-lbl',offset:[0,0]});
     }
 
@@ -769,13 +1048,15 @@ function renderBubbles(data) {
 /* ── Tooltip ─────────────────────────────────────────────────── */
 function showTip(e,p){
   const sl=Math.round(p.sl_percent),c=clr(sl);
-  const diff=sl-Math.round(p.target_percent),dc=diff>=0?'#22c55e':'#ef4444';
+  const slChg=p.sl_change_pct!=null?fmtSlChg(p.sl_change_pct):'—';
+  const salesChg=p.sales_change_pct!=null?fmtChg(p.sales_change_pct):'—';
   TIP.innerHTML=`<div class="tt">${p.name_fa}</div>
-    <div class="tr"><span>سرویس لول</span><span style="color:${c};font-size:14px">${sl}٪</span></div>
-    <div class="tr"><span>هدف</span><span>${Math.round(p.target_percent)}٪</span></div>
-    <div class="tr"><span>انحراف</span><span style="color:${dc}">${diff>=0?'+':''}${diff}٪</span></div>
-    <div class="tr"><span>وندور</span><span>${p.vendor_count.toLocaleString()}</span></div>
-    <div class="tr"><span>سفارش</span><span>${p.total_orders.toLocaleString()}</span></div>
+    <div class="tr"><span>SL (جاری)</span><span style="color:${c};font-size:14px">${sl}٪</span></div>
+    <div class="tr"><span>تغییر SL</span><span>${slChg}</span></div>
+    <div class="tr"><span>فروش (جاری)</span><span style="color:#60a5fa">${fmtMoney(p.net_amount)}</span></div>
+    <div class="tr"><span>تغییر فروش</span><span>${salesChg}</span></div>
+    <div class="tr"><span>تشخیص</span><span style="font-size:11px">${p.diagnosis_label||'—'}</span></div>
+    <div class="tr"><span>وندور / سفارش</span><span>${(p.vendor_count||0).toLocaleString()} / ${(p.total_orders||0).toLocaleString()}</span></div>
     ${currentLevel!=='store'?'<div class="th">کلیک برای مشاهده جزئیات</div>':''}`;
   TIP.style.display='block'; moveTip(e);
 }
@@ -809,8 +1090,8 @@ function hideOverlay(){document.getElementById('overlay').style.display='none';}
 /* ── Init ───────────────────────────────────────────────────── */
 map.on('resize',()=>map.invalidateSize());
 initSelects();
-loadFilterOptions();
-loadData();
+initDayBetween();
+loadFilterOptions().then(() => loadData());
 setInterval(loadData, REFRESH_MS);
 </script>
 </body>
