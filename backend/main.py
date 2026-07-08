@@ -1,6 +1,6 @@
 """
 Iran Province Service Level Dashboard — Backend API
-پیش‌نیاز: pip install fastapi uvicorn pyodbc
+پیش‌نیاز: pip install fastapi uvicorn clickhouse-connect
 اجرا: python -m uvicorn main:app --host 0.0.0.0 --port 8000
 """
 
@@ -8,13 +8,22 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from typing import Optional, List
-import pyodbc
+import clickhouse_connect
 import logging
 import threading
 import time
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# ClickHouse tables
+T_FACT = "ChatBotDB.Fact_VendorServiceLevel"
+T_LOC  = "COM.DIM_InventLocation"
+T_ITEM = "COM.DIM_Item"
+T_DATE = "COM.DIM_Date"
+
+_DIST = "ifNull(nullIf(loc.District, ''), 'نامشخص')"
+_ON_TIME = "if(f.receive_date_id > 0 AND f.receive_date_id <= f.delivery_date_id, 1, 0)"
 
 
 # ─── Startup: pre-warm caches (background — server starts immediately) ─────────
@@ -24,7 +33,11 @@ def _warm_caches():
         _refresh_loc_combos()
         _refresh_item_combos()
         _refresh_date_combos()
-        service_level()
+        service_level(
+            province=None, city=None, district=None, store_id=None,
+            ig1=None, ig2=None, ig3=None, ig4=None, ig5=None,
+            commerce_dept=None, year=None, month=None, day=None,
+        )
         logger.info("cache warm-up done")
     except Exception as e:
         logger.warning(f"warm-up failed (non-fatal): {e}")
@@ -45,24 +58,28 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-CONN_STR = (
-    "DRIVER={ODBC Driver 17 for SQL Server};"
-    "SERVER=okdc34017\\node;"
-    "DATABASE=OKDWH;"
-    "Trusted_Connection=yes;"
-)
+
+def get_client():
+    try:
+        return clickhouse_connect.get_client(
+            host="10.192.31.65",
+            port=8123,
+            username="default",
+            password="Aliz@123",
+            secure=False,
+            compress=False,
+        )
+    except Exception as e:
+        logger.error(f"ClickHouse connection error: {e}")
+        raise HTTPException(status_code=503, detail="خطا در اتصال به دیتابیس")
 
 
 # ─── Cache ─────────────────────────────────────────────────────────────────────
 _cache: dict = {}
 CACHE_TTL_PROVINCE = 15 * 60
 CACHE_TTL_DETAIL   =  5 * 60
-CACHE_TTL_COMBOS   = 30 * 60   # combo tables rarely change
+CACHE_TTL_COMBOS   = 30 * 60
 
-# In-memory combo tables (loaded once, refreshed every 30 min)
-# loc: [(province, city, district), ...]
-# itm: [(l1, l2, l3, l4, l5, cd), ...]
-# dt:  [(year, month, day), ...]
 _loc_combos: list = []
 _loc_combos_ts: float = 0.0
 _itm_combos: list = []
@@ -71,22 +88,13 @@ _date_combos: list = []
 _date_combos_ts: float = 0.0
 
 
-def get_connection():
+def run_query(sql: str, params: dict | None = None):
+    client = get_client()
     try:
-        return pyodbc.connect(CONN_STR, timeout=10)
-    except Exception as e:
-        logger.error(f"DB connection error: {e}")
-        raise HTTPException(status_code=503, detail="خطا در اتصال به دیتابیس")
-
-
-def run_query(sql: str, params: tuple = ()):
-    conn = get_connection()
-    try:
-        cursor = conn.cursor()
-        cursor.execute(sql, params)
-        columns = [col[0] for col in cursor.description]
+        result = client.query(sql, parameters=params or {})
+        columns = result.column_names
         data = []
-        for row in cursor.fetchall():
+        for row in result.result_rows:
             r = dict(zip(columns, row))
             if "sl_percent" in r:
                 r["sl_percent"]     = float(r.get("sl_percent") or 0)
@@ -100,25 +108,18 @@ def run_query(sql: str, params: tuple = ()):
     except Exception as e:
         logger.error(f"Query error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        conn.close()
 
 
-def run_rows(sql: str, params: tuple = ()) -> list:
-    """Return raw list of tuples; returns [] on error."""
-    conn = get_connection()
+def run_rows(sql: str, params: dict | None = None) -> list:
     try:
-        cursor = conn.cursor()
-        cursor.execute(sql, params)
-        return [tuple(row) for row in cursor.fetchall()]
+        result = get_client().query(sql, parameters=params or {})
+        return [tuple(row) for row in result.result_rows]
     except Exception as e:
         logger.warning(f"run_rows error: {e}")
         return []
-    finally:
-        conn.close()
 
 
-def cached_query(key: str, sql: str, params: tuple = (), ttl: int = CACHE_TTL_PROVINCE):
+def cached_query(key: str, sql: str, params: dict | None = None, ttl: int = CACHE_TTL_PROVINCE):
     now = time.monotonic()
     if key in _cache:
         result, ts = _cache[key]
@@ -130,20 +131,18 @@ def cached_query(key: str, sql: str, params: tuple = (), ttl: int = CACHE_TTL_PR
     return result
 
 
-# ─── Shared aggregation fragment (TRY_CAST avoids crash on 'Cancelled' rows) ───
-_AGG = """
-    ROUND(
-        100.0 * SUM(TRY_CAST(f.IsOnTimeDeliverity AS INT))
-        / NULLIF(SUM(CASE WHEN TRY_CAST(f.IsOnTimeDeliverity AS INT) IS NOT NULL THEN 1 ELSE 0 END), 0)
-    , 1)                                            AS sl_percent,
+# ─── Shared aggregation ────────────────────────────────────────────────────────
+_AGG = f"""
+    round(
+        100.0 * sum({_ON_TIME})
+        / nullIf(sum(if({_ON_TIME} IS NOT NULL, 1, 0)), 0),
+    1)                                              AS sl_percent,
     80.0                                            AS target_percent,
-    COUNT(DISTINCT f.COM_DIM_VendorRef)             AS vendor_count,
-    COUNT(f.ID)                                     AS total_orders"""
+    uniqExact(f.vendor_id)                          AS vendor_count,
+    count()                                         AS total_orders"""
 
-# Delivery date FK on fact table → COM.DIM_Date
-_DATE_JOIN = "JOIN [COM].[DIM_Date] AS dt WITH (NOLOCK) ON dt.ID = f.COM_DIM_Date_DeliveryDateRef"
+_DATE_JOIN = f"JOIN {T_DATE} AS dt ON dt.ID = f.delivery_date_id"
 
-# Default Persian year range (applied when no specific year is selected)
 DEFAULT_YEAR_FROM = 1399
 DEFAULT_YEAR_TO   = 1405
 
@@ -157,18 +156,19 @@ def _tolist(v) -> list:
     return [v]
 
 
-def _add_in(conditions: list, params: list, col: str, vals, cast=None):
+def _add_in(conditions: list, params: dict, col: str, vals, typ: str = "String"):
     vals = _tolist(vals)
     if not vals:
         return
-    if cast is not None:
-        vals = [cast(v) for v in vals]
+    key = f"f_{len(params)}"
+    if typ == "Int32":
+        vals = [int(v) for v in vals]
     if len(vals) == 1:
-        conditions.append(f"{col} = ?")
-        params.append(vals[0])
+        params[key] = vals[0]
+        conditions.append(f"{col} = {{{key}:{typ}}}")
     else:
-        conditions.append(f"{col} IN ({','.join('?' * len(vals))})")
-        params.extend(vals)
+        params[key] = vals
+        conditions.append(f"{col} IN {{{key}:Array({typ})}}")
 
 
 def build_filters(
@@ -178,12 +178,12 @@ def build_filters(
     year=None, month=None, day=None,
 ):
     conditions: list[str] = []
-    params:     list      = []
+    params: dict = {}
     need_item = any(_tolist(x) for x in [ig1, ig2, ig3, ig4, ig5, commerce_dept])
 
     _add_in(conditions, params, "loc.StateChart", province)
     _add_in(conditions, params, "loc.CityChart", city)
-    _add_in(conditions, params, "ISNULL(NULLIF(loc.District, ''), N'نامشخص')", district)
+    _add_in(conditions, params, _DIST, district)
     _add_in(conditions, params, "loc.BKInventLocationId", store_id)
 
     for col, val in [("Level1", ig1), ("Level2", ig2), ("Level3", ig3), ("Level4", ig4), ("Level5", ig5)]:
@@ -192,20 +192,21 @@ def build_filters(
 
     years = _tolist(year)
     if years:
-        _add_in(conditions, params, "dt.PersianYearInt", years, cast=int)
+        _add_in(conditions, params, "dt.PersianYearInt", years, typ="Int32")
     else:
-        conditions.append("dt.PersianYearInt BETWEEN ? AND ?")
-        params.extend([DEFAULT_YEAR_FROM, DEFAULT_YEAR_TO])
+        params["yr_from"] = DEFAULT_YEAR_FROM
+        params["yr_to"]   = DEFAULT_YEAR_TO
+        conditions.append("dt.PersianYearInt BETWEEN {yr_from:Int32} AND {yr_to:Int32}")
 
-    _add_in(conditions, params, "dt.PersianMonthNo", month, cast=int)
-    _add_in(conditions, params, "dt.PersianDayInMonth", day, cast=int)
+    _add_in(conditions, params, "dt.PersianMonthNo", month, typ="Int32")
+    _add_in(conditions, params, "dt.PersianDayInMonth", day, typ="Int32")
 
     extra_joins = f"\n{_DATE_JOIN}"
     if need_item:
-        extra_joins += "\nLEFT JOIN [COM].[DIM_Item] AS itm WITH (NOLOCK) ON itm.ID = f.COM_DIM_ItemRef"
+        extra_joins += f"\nLEFT JOIN {T_ITEM} AS itm ON itm.ID = f.item_id"
 
     extra_where = ("AND " + " AND ".join(conditions)) if conditions else ""
-    return extra_joins, extra_where, tuple(params)
+    return extra_joins, extra_where, params
 
 
 def filter_kw(**kwargs) -> dict:
@@ -225,21 +226,26 @@ def filter_key(base: str, kw: dict) -> str:
     return f"{base}:{suffix}" if suffix else base
 
 
-# ─── Combo-table cache (load once, Python-side cascade) ───────────────────────
+def _merge_params(*dicts) -> dict:
+    merged: dict = {}
+    for d in dicts:
+        merged.update(d)
+    return merged
+
+
+# ─── Combo-table cache ─────────────────────────────────────────────────────────
 
 def _refresh_loc_combos():
-    """One DB query → all (province, city, district) combos. Cached 30 min."""
     global _loc_combos, _loc_combos_ts
-    sql = """
+    sql = f"""
 SELECT DISTINCT
     loc.StateChart,
     loc.CityChart,
-    ISNULL(NULLIF(loc.District, ''), N'نامشخص') AS dist
-FROM [SCM].[Fact_VendorServiceLevel] AS f WITH (NOLOCK)
-JOIN [COM].[DIM_InventLocation]      AS loc WITH (NOLOCK)
-  ON loc.ID = f.COM_DIM_InventLocationRef
-WHERE loc.StateChart IS NOT NULL AND loc.StateChart <> ''
-  AND loc.CityChart  IS NOT NULL AND loc.CityChart  <> ''"""
+    {_DIST} AS dist
+FROM {T_FACT} AS f
+JOIN {T_LOC} AS loc ON loc.ID = f.location_id
+WHERE loc.StateChart != ''
+  AND loc.CityChart  != ''"""
     rows = run_rows(sql)
     if rows:
         _loc_combos    = [(str(r[0]), str(r[1]), str(r[2])) for r in rows]
@@ -248,14 +254,13 @@ WHERE loc.StateChart IS NOT NULL AND loc.StateChart <> ''
 
 
 def _refresh_item_combos():
-    """One DB query → all (Level1…5, CommerceDepartment) combos. Cached 30 min."""
     global _itm_combos, _itm_combos_ts
-    sql = """
+    sql = f"""
 SELECT DISTINCT
-    ISNULL(Level1, ''),  ISNULL(Level2, ''),  ISNULL(Level3, ''),
-    ISNULL(Level4, ''),  ISNULL(Level5, ''),  ISNULL(CommerceDepartment, '')
-FROM [COM].[DIM_Item] WITH (NOLOCK)
-WHERE Level1 IS NOT NULL AND Level1 <> ''"""
+    ifNull(Level1, ''), ifNull(Level2, ''), ifNull(Level3, ''),
+    ifNull(Level4, ''), ifNull(Level5, ''), ifNull(CommerceDepartment, '')
+FROM {T_ITEM}
+WHERE Level1 != ''"""
     rows = run_rows(sql)
     if rows:
         _itm_combos    = [tuple(str(c) for c in r) for r in rows]
@@ -264,7 +269,6 @@ WHERE Level1 IS NOT NULL AND Level1 <> ''"""
 
 
 def _refresh_date_combos():
-    """One DB query → all (year, month, day) combos with fact data. Cached 30 min."""
     global _date_combos, _date_combos_ts
     sql = f"""
 SELECT DISTINCT
@@ -272,19 +276,19 @@ SELECT DISTINCT
     dt.PersianMonthNo,
     dt.PersianDayInMonth
 FROM (
-    SELECT DISTINCT COM_DIM_Date_DeliveryDateRef AS date_ref
-    FROM [SCM].[Fact_VendorServiceLevel] WITH (NOLOCK)
-    WHERE COM_DIM_Date_DeliveryDateRef IS NOT NULL
+    SELECT DISTINCT delivery_date_id AS date_ref
+    FROM {T_FACT}
+    WHERE delivery_date_id IS NOT NULL
 ) AS fd
-JOIN [COM].[DIM_Date] AS dt WITH (NOLOCK) ON dt.ID = fd.date_ref
-WHERE dt.PersianYearInt BETWEEN {DEFAULT_YEAR_FROM} AND {DEFAULT_YEAR_TO}"""
-    rows = run_rows(sql)
+JOIN {T_DATE} AS dt ON dt.ID = fd.date_ref
+WHERE dt.PersianYearInt BETWEEN {{yr_from:Int32}} AND {{yr_to:Int32}}"""
+    rows = run_rows(sql, {"yr_from": DEFAULT_YEAR_FROM, "yr_to": DEFAULT_YEAR_TO})
     if rows:
         _date_combos    = [(int(r[0]), int(r[1]), int(r[2])) for r in rows]
         _date_combos_ts = time.monotonic()
         logger.info(f"date_combos loaded: {len(_date_combos)} rows")
     else:
-        logger.warning("date_combos: no rows returned — check COM_DIM_Date_DeliveryDateRef join")
+        logger.warning("date_combos: no rows returned")
 
 
 def _get_loc_combos() -> list:
@@ -305,7 +309,7 @@ def _get_date_combos() -> list:
     return _date_combos
 
 
-# ─── Filter options — Python-side cascade (no extra DB queries) ────────────────
+# ─── Filter options ────────────────────────────────────────────────────────────
 @app.get("/api/filter-options")
 def filter_options(
     province:      Optional[List[str]] = Query(None),
@@ -393,15 +397,15 @@ def service_level(
     sql = f"""
 SELECT
     loc.StateChart                                  AS name_fa,{_AGG},
-    AVG(TRY_CAST(loc.Latitude  AS FLOAT))           AS lat,
-    AVG(TRY_CAST(loc.Longitude AS FLOAT))           AS lng
-FROM [SCM].[Fact_VendorServiceLevel] AS f   WITH (NOLOCK)
-JOIN [COM].[DIM_InventLocation]      AS loc WITH (NOLOCK) ON loc.ID = f.COM_DIM_InventLocationRef
+    avg(toFloat64OrNull(toString(loc.Latitude)))    AS lat,
+    avg(toFloat64OrNull(toString(loc.Longitude)))   AS lng
+FROM {T_FACT} AS f
+JOIN {T_LOC} AS loc ON loc.ID = f.location_id
 {ej}
-WHERE loc.StateChart IS NOT NULL AND loc.StateChart <> ''
+WHERE loc.StateChart != ''
 {ew}
 GROUP BY loc.StateChart
-ORDER BY sl_percent DESC;"""
+ORDER BY sl_percent DESC"""
     kw = filter_kw(
         province=province, city=city, district=district, store_id=store_id,
         ig1=ig1, ig2=ig2, ig3=ig3, ig4=ig4, ig5=ig5, cd=commerce_dept,
@@ -432,25 +436,26 @@ def service_level_cities(
         None, city, district, store_id, ig1, ig2, ig3, ig4, ig5, commerce_dept,
         year, month, day,
     )
+    params = _merge_params(fp, {"drill_province": province})
     sql = f"""
 SELECT
     loc.CityChart                                   AS name_fa,{_AGG},
-    AVG(TRY_CAST(loc.Latitude  AS FLOAT))           AS lat,
-    AVG(TRY_CAST(loc.Longitude AS FLOAT))           AS lng
-FROM [SCM].[Fact_VendorServiceLevel] AS f   WITH (NOLOCK)
-JOIN [COM].[DIM_InventLocation]      AS loc WITH (NOLOCK) ON loc.ID = f.COM_DIM_InventLocationRef
+    avg(toFloat64OrNull(toString(loc.Latitude)))    AS lat,
+    avg(toFloat64OrNull(toString(loc.Longitude)))   AS lng
+FROM {T_FACT} AS f
+JOIN {T_LOC} AS loc ON loc.ID = f.location_id
 {ej}
-WHERE loc.StateChart = ?
-  AND loc.CityChart IS NOT NULL AND loc.CityChart <> ''
+WHERE loc.StateChart = {{drill_province:String}}
+  AND loc.CityChart != ''
 {ew}
 GROUP BY loc.CityChart
-ORDER BY sl_percent DESC;"""
+ORDER BY sl_percent DESC"""
     kw = filter_kw(
         province=province, city=city, district=district, store_id=store_id,
         ig1=ig1, ig2=ig2, ig3=ig3, ig4=ig4, ig5=ig5, cd=commerce_dept,
         year=year, month=month, day=day,
     )
-    data = cached_query(filter_key(f"cities:{province}", kw), sql, (province,)+fp, CACHE_TTL_DETAIL)
+    data = cached_query(filter_key(f"cities:{province}", kw), sql, params, CACHE_TTL_DETAIL)
     return {"status": "ok", "level": "city", "data": data}
 
 
@@ -475,24 +480,26 @@ def service_level_districts(
         None, None, district, store_id, ig1, ig2, ig3, ig4, ig5, commerce_dept,
         year, month, day,
     )
+    params = _merge_params(fp, {"drill_province": province, "drill_city": city})
     sql = f"""
 SELECT
-    ISNULL(NULLIF(loc.District, ''), N'نامشخص')    AS name_fa,{_AGG},
-    AVG(TRY_CAST(loc.Latitude  AS FLOAT))           AS lat,
-    AVG(TRY_CAST(loc.Longitude AS FLOAT))           AS lng
-FROM [SCM].[Fact_VendorServiceLevel] AS f   WITH (NOLOCK)
-JOIN [COM].[DIM_InventLocation]      AS loc WITH (NOLOCK) ON loc.ID = f.COM_DIM_InventLocationRef
+    {_DIST}                                         AS name_fa,{_AGG},
+    avg(toFloat64OrNull(toString(loc.Latitude)))    AS lat,
+    avg(toFloat64OrNull(toString(loc.Longitude)))   AS lng
+FROM {T_FACT} AS f
+JOIN {T_LOC} AS loc ON loc.ID = f.location_id
 {ej}
-WHERE loc.StateChart = ? AND loc.CityChart = ?
+WHERE loc.StateChart = {{drill_province:String}}
+  AND loc.CityChart  = {{drill_city:String}}
 {ew}
-GROUP BY ISNULL(NULLIF(loc.District, ''), N'نامشخص')
-ORDER BY sl_percent DESC;"""
+GROUP BY {_DIST}
+ORDER BY sl_percent DESC"""
     kw = filter_kw(
         province=province, city=city, district=district, store_id=store_id,
         ig1=ig1, ig2=ig2, ig3=ig3, ig4=ig4, ig5=ig5, cd=commerce_dept,
         year=year, month=month, day=day,
     )
-    data = cached_query(filter_key(f"districts:{province}:{city}", kw), sql, (province,city)+fp, CACHE_TTL_DETAIL)
+    data = cached_query(filter_key(f"districts:{province}:{city}", kw), sql, params, CACHE_TTL_DETAIL)
     return {"status": "ok", "level": "district", "data": data}
 
 
@@ -517,27 +524,32 @@ def service_level_stores(
         None, None, None, store_id, ig1, ig2, ig3, ig4, ig5, commerce_dept,
         year, month, day,
     )
+    params = _merge_params(fp, {
+        "drill_province": province,
+        "drill_city": city,
+        "drill_district": district,
+    })
     sql = f"""
 SELECT
     loc.BKInventLocationId                          AS store_id,
     loc.Name                                        AS name_fa,{_AGG},
-    MAX(TRY_CAST(loc.Latitude  AS FLOAT))           AS lat,
-    MAX(TRY_CAST(loc.Longitude AS FLOAT))           AS lng
-FROM [SCM].[Fact_VendorServiceLevel] AS f   WITH (NOLOCK)
-JOIN [COM].[DIM_InventLocation]      AS loc WITH (NOLOCK) ON loc.ID = f.COM_DIM_InventLocationRef
+    max(toFloat64OrNull(toString(loc.Latitude)))    AS lat,
+    max(toFloat64OrNull(toString(loc.Longitude)))   AS lng
+FROM {T_FACT} AS f
+JOIN {T_LOC} AS loc ON loc.ID = f.location_id
 {ej}
-WHERE loc.StateChart = ?
-  AND loc.CityChart  = ?
-  AND ISNULL(NULLIF(loc.District, ''), N'نامشخص') = ?
+WHERE loc.StateChart = {{drill_province:String}}
+  AND loc.CityChart  = {{drill_city:String}}
+  AND {_DIST}        = {{drill_district:String}}
 {ew}
 GROUP BY loc.BKInventLocationId, loc.Name
-ORDER BY sl_percent DESC;"""
+ORDER BY sl_percent DESC"""
     kw = filter_kw(
         province=province, city=city, district=district, store_id=store_id,
         ig1=ig1, ig2=ig2, ig3=ig3, ig4=ig4, ig5=ig5, cd=commerce_dept,
         year=year, month=month, day=day,
     )
-    data = cached_query(filter_key(f"stores:{province}:{city}:{district}", kw), sql, (province,city,district)+fp, CACHE_TTL_DETAIL)
+    data = cached_query(filter_key(f"stores:{province}:{city}:{district}", kw), sql, params, CACHE_TTL_DETAIL)
     return {"status": "ok", "level": "store", "data": data}
 
 
@@ -556,6 +568,7 @@ def clear_cache():
 def health():
     return {
         "status": "ok",
+        "database": "clickhouse",
         "loc_combos": len(_loc_combos),
         "itm_combos": len(_itm_combos),
         "date_combos": len(_date_combos),

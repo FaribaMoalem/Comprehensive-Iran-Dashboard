@@ -184,3 +184,7 @@ nssm start IranSLDashboard
 | `Login failed for user` | user/pass یا Trusted Connection را بررسی کنید |
 | `Connection timeout` | firewall پورت SQL Server را باز کنید (1433) |
 | داشبورد خالی است | در Console مرورگر (F12) خطای CORS را بررسی کنید |
+
+
+
+PS D:\D\iran-sl-dashboard\Comprehensive-Iran-Dashboard\backend> python -m uvicorn main:app --host 0.0.0.0 --port 8000
